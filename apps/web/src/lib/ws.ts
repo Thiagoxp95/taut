@@ -104,7 +104,7 @@ export class RealtimeClient {
     this.#restart()
   }
 
-  /** After a company switch: replay that company's log from scratch. */
+  /** After a company switch: forget the old company's cursor and open at that one's head. */
   reset(companyId: CompanyId | string): void {
     this.#companyId = companyId
     this.#lastSeq = 0
@@ -227,10 +227,13 @@ export class RealtimeClient {
     if (frame.type === 'pong') return
 
     if (frame.type === 'resync') {
+      // A cursor we had is now known to be stale, so the caches built from it must go.
+      // A cold connect gets the same frame with nothing to throw away.
+      const hadCursor = this.#lastSeq > 0
       this.#lastSeq = frame.head
       if (this.#companyId !== null) writeLastSeq(this.#companyId, frame.head)
       this.#notifySnapshot()
-      for (const listener of this.#resyncListeners) listener(frame.head)
+      if (hadCursor) for (const listener of this.#resyncListeners) listener(frame.head)
       return
     }
 

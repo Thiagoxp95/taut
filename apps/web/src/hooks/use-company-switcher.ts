@@ -10,7 +10,7 @@ import { realtime } from '@/lib/ws'
 /**
  * Switching company is a hard boundary: the session's active company changes,
  * every cached list belongs to the old one, and the event sequence restarts.
- * So: switch → drop the cache → reopen the socket at `since=0` → land on `/`.
+ * So: switch → drop the cache → reopen the socket with no cursor → land on `/`.
  */
 export function useCompanySwitcher(): (companyId: CompanyId) => Promise<void> {
   const queryClient = useQueryClient()
