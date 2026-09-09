@@ -1,0 +1,3 @@
+# Copied in by `pnpm --filter @taut/runtime build:image` from ../../taut-mcp/dist/
+mcp.js
+cli.js

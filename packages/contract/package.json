@@ -1,0 +1,35 @@
+{
+  "name": "@taut/contract",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api/index.ts",
+    "./desktop": "./src/desktop.ts",
+    "./domain": "./src/domain/index.ts",
+    "./errors": "./src/errors.ts",
+    "./ids": "./src/ids.ts",
+    "./events": "./src/events.ts",
+    "./terminal": "./src/terminal.ts"
+  },
+  "scripts": {
+    "lint": "eslint --cache .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf .turbo node_modules .eslintcache"
+  },
+  "devDependencies": {
+    "@effect/vitest": "0.30.0",
+    "@taut/eslint-config": "workspace:*",
+    "@taut/typescript-config": "workspace:*",
+    "@types/node": "26.5.0",
+    "eslint": "^9.39.1",
+    "typescript": "^5.9.3",
+    "vitest": "3.2.7"
+  },
+  "dependencies": {
+    "@effect/platform": "0.97.1",
+    "effect": "3.22.1"
+  }
+}

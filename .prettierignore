@@ -1,0 +1,6 @@
+node_modules
+dist
+out
+.turbo
+pnpm-lock.yaml
+apps/web/src/routeTree.gen.ts

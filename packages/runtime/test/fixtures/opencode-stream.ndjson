@@ -1,0 +1,6 @@
+{"type":"step_start","timestamp":1,"sessionID":"ses_abc","part":{"type":"step-start"}}
+{"type":"tool_use","timestamp":2,"sessionID":"ses_abc","part":{"id":"prt_1","type":"tool","tool":"bash","callID":"call_1","state":{"status":"running","input":{"command":"ls"}}}}
+{"type":"tool_use","timestamp":3,"sessionID":"ses_abc","part":{"id":"prt_1","type":"tool","tool":"bash","callID":"call_1","state":{"status":"completed","input":{"command":"ls"},"output":"a\nb\n"}}}
+{"type":"text","timestamp":4,"sessionID":"ses_abc","part":{"id":"prt_2","type":"text","text":"Listed files."}}
+{"type":"step_finish","timestamp":5,"sessionID":"ses_abc","part":{"type":"step-finish","reason":"stop","cost":0.01,"tokens":{"input":100,"output":20,"reasoning":0,"cache":{"read":50,"write":10}}}}
+{"type":"error","timestamp":6,"sessionID":"ses_abc","error":{"name":"ProviderAuthError","data":{"message":"invalid api key"}}}

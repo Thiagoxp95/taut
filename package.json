@@ -1,0 +1,29 @@
+{
+  "name": "taut",
+  "private": true,
+  "packageManager": "pnpm@10.18.3",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "bash scripts/free-ports.sh 3000 5173 && turbo run dev --filter=@taut/server --filter=@taut/web",
+    "dev:calls": "bash scripts/free-ports.sh 3000 5173 && bash scripts/dev-livekit.sh run turbo run dev --filter=@taut/server --filter=@taut/web",
+    "calls:up": "bash scripts/dev-livekit.sh start",
+    "calls:down": "bash scripts/dev-livekit.sh stop",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "format": "prettier --write \"**/*.{ts,tsx,js,mjs,json,md,yaml,yml,css}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,mjs,json,md,yaml,yml,css}\"",
+    "clean": "turbo run clean && rm -rf node_modules .turbo",
+    "e2e": "bash scripts/e2e.sh",
+    "dev:desktop": "bash scripts/free-ports.sh 5273 && turbo run dev --filter=@taut/desktop",
+    "dev:ts": "bash scripts/dev.sh"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.6",
+    "turbo": "^2.10.12",
+    "typescript": "^5.9.3"
+  }
+}

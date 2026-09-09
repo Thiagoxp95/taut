@@ -1,0 +1,27 @@
+# eturnal TURN/STUN config, mounted read-only into the `eturnal` service (calls profile).
+# The image runs as uid 9000: this file must be owned/readable by it —
+#   chown 9000:9000 deploy/eturnal.yml && chmod 640 deploy/eturnal.yml
+# or eturnal fails to start with a permission error, not a helpful one.
+
+eturnal:
+  listen:
+    - ip: '::'
+      port: 3478
+      transport: udp
+    - ip: '::'
+      port: 3478
+      transport: tcp
+
+  # secret and relay_ipv4_addr are intentionally not set here — eturnal reads
+  # ETURNAL_SECRET and ETURNAL_RELAY_IPV4_ADDR from the environment (see the
+  # `eturnal` service in docker-compose.yml), and the env vars win over anything
+  # written in this file.
+  # secret: ...
+  # relay_ipv4_addr: ...
+
+  relay_min_port: 49160
+  relay_max_port: 49200
+
+  blacklist_peers: [recommended]
+  strict_expiry: false
+  log_dir: stdout

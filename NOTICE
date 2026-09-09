@@ -1,0 +1,53 @@
+# Third-party notices
+
+Taut bundles the following third-party material. Each is used under its own
+license; the text of the MIT License follows at the end of this file.
+
+## Built-in agent skills
+
+Both built-in skills are shipped in `apps/server/src/agents/defaultSkills.ts`
+and written into every agent home as `skills/<name>/SKILL.md`.
+
+### no-ai-slop
+
+Adapted from **no-ai-slop** by Peter Yang — https://github.com/petergyang/no-ai-slop
+Copyright (c) Peter Yang. Licensed under the MIT License.
+
+Adapted: the upstream skill edits a draft the user pastes in. Taut's version is
+scoped to the agent's own chat output (channel messages, thread replies, DMs,
+task summaries) and explicitly does not apply to code, commits, PR descriptions
+or files on disk.
+
+### humanizer
+
+**humanizer** v3.0.0 by blader — https://github.com/blader/humanizer
+Copyright (c) blader. Licensed under the MIT License.
+
+The body is included verbatim; only the frontmatter `description` is replaced,
+to route on Taut chat messages rather than on a pasted draft.
+
+The patterns in that skill derive from Wikipedia's "Signs of AI writing"
+(https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing), maintained by
+WikiProject AI Cleanup, available under CC BY-SA 4.0.
+
+---
+
+## MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

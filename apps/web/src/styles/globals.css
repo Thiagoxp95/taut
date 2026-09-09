@@ -1,0 +1,219 @@
+@import '@taut/ui/globals.css';
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  overscroll-behavior: none;
+}
+
+/* Slack-like sidebar scrollbars: present but quiet. */
+.taut-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/*
+ * A toolbar that scrolls sideways rather than spilling past its border when
+ * the surface is too narrow for every button. The bar is short, so a visible
+ * scrollbar would eat most of it — swiping and the arrow keys still work.
+ */
+.taut-rail {
+  scrollbar-width: none;
+}
+
+.taut-rail::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * Inside the Electron shell the macOS titlebar is `hiddenInset`, so the app
+ * owns the strip the traffic lights sit in. `.desktop` is set on <html> by
+ * `apps/desktop/src/preload`, so a browser tab is untouched.
+ */
+html.desktop {
+  --taut-titlebar: 2.25rem;
+}
+
+html.desktop .taut-shell::before {
+  content: '';
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: var(--taut-titlebar);
+  z-index: 60;
+  -webkit-app-region: drag;
+}
+
+/*
+ * Nothing is pushed down: the sidebar and the top bars run to the top of the
+ * window and pad their own content past the traffic lights, so the shell has
+ * no seam under the titlebar — just the sidebar and header backgrounds.
+ */
+html.desktop .taut-shell [data-slot='sidebar-header'] {
+  padding-top: calc(var(--taut-titlebar) + 0.5rem);
+}
+
+html.desktop .taut-topbar {
+  height: calc(3.5rem + var(--taut-titlebar));
+  padding-top: var(--taut-titlebar);
+}
+
+/*
+ * Rich text — see `components/rich-text.tsx`.
+ *
+ * Message bodies are markdown. Nested lists need a little breathing room that
+ * per-element Tailwind classes can't express (the renderer only sees one
+ * level at a time), and highlight.js emits its own class names, so both live
+ * here rather than in the component.
+ */
+.taut-rich ul ul,
+.taut-rich ul ol,
+.taut-rich ol ul,
+.taut-rich ol ol {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
+.taut-rich li > p {
+  margin: 0;
+}
+
+/* A streaming agent reply: the caret rides the end of the last block. */
+.taut-caret > *:last-child::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--foreground) 70%, transparent);
+  animation: var(--animate-pulse);
+}
+
+/*
+ * highlight.js palette, expressed in the app's own tokens so a code block
+ * stays legible in both themes instead of shipping two vendor stylesheets.
+ */
+.hljs {
+  --hljs-comment: color-mix(in oklab, var(--muted-foreground) 90%, transparent);
+  --hljs-keyword: oklch(0.55 0.19 305);
+  --hljs-string: oklch(0.52 0.14 150);
+  --hljs-number: oklch(0.56 0.15 45);
+  --hljs-title: oklch(0.52 0.16 255);
+  --hljs-type: oklch(0.54 0.13 195);
+  --hljs-attr: oklch(0.54 0.15 25);
+  color: var(--foreground);
+}
+
+.dark .hljs {
+  --hljs-keyword: oklch(0.78 0.14 305);
+  --hljs-string: oklch(0.8 0.13 150);
+  --hljs-number: oklch(0.82 0.13 60);
+  --hljs-title: oklch(0.79 0.12 245);
+  --hljs-type: oklch(0.82 0.1 195);
+  --hljs-attr: oklch(0.8 0.12 30);
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--hljs-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-operator {
+  color: var(--hljs-keyword);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-char.escape_,
+.hljs-addition {
+  color: var(--hljs-string);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-meta {
+  color: var(--hljs-number);
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name {
+  color: var(--hljs-title);
+}
+
+.hljs-type,
+.hljs-built_in,
+.hljs-class .hljs-title,
+.hljs-selector-class,
+.hljs-template-variable {
+  color: var(--hljs-type);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-tag,
+.hljs-selector-id,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-property {
+  color: var(--hljs-attr);
+}
+
+.hljs-deletion {
+  color: var(--destructive);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
+/*
+ * A ⌘K search hit landing in a message list: the row takes DOM focus and its
+ * background pulses twice over two seconds so the eye finds it. See
+ * `components/message-list.tsx` — the class is added imperatively so the same
+ * message can be re-flashed without remounting the row.
+ */
+@keyframes taut-flash {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  20%,
+  55% {
+    background-color: color-mix(in oklab, var(--primary) 18%, transparent);
+  }
+}
+
+.taut-flash {
+  animation: taut-flash 1s cubic-bezier(0.4, 0, 0.6, 1) 2;
+}
+
+.taut-flash:focus,
+.taut-flash:focus-visible {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .taut-flash {
+    animation: none;
+    background-color: color-mix(in oklab, var(--primary) 14%, transparent);
+  }
+}

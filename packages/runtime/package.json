@@ -1,0 +1,41 @@
+{
+  "name": "@taut/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./machine": "./src/machine/index.ts",
+    "./adapters": "./src/adapters/index.ts",
+    "./browser": "./src/browser.ts",
+    "./redact": "./src/redact.ts",
+    "./repos": "./src/repos.ts",
+    "./instructions": "./src/instructions.ts",
+    "./run": "./src/run.ts"
+  },
+  "scripts": {
+    "lint": "eslint --cache .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build:image": "pnpm --filter @taut/taut-mcp build && cp ../taut-mcp/dist/mcp.js docker/mcp.js && cp ../taut-mcp/dist/cli.js docker/cli.js && docker build -f docker/agent.Dockerfile -t taut/agent:latest docker",
+    "clean": "rm -rf .turbo node_modules .eslintcache"
+  },
+  "dependencies": {
+    "@playwright/mcp": "0.0.80",
+    "@taut/contract": "workspace:*",
+    "dockerode": "5.0.1",
+    "effect": "3.22.1",
+    "tar-stream": "3.2.1"
+  },
+  "devDependencies": {
+    "@effect/vitest": "0.30.0",
+    "@taut/eslint-config": "workspace:*",
+    "@taut/typescript-config": "workspace:*",
+    "@types/dockerode": "4.0.1",
+    "@types/node": "22.20.1",
+    "@types/tar-stream": "3.1.4",
+    "eslint": "^9.39.1",
+    "typescript": "^5.9.3",
+    "vitest": "3.2.7"
+  }
+}

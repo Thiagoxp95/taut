@@ -1,0 +1,52 @@
+{
+  "name": "@taut/desktop",
+  "version": "0.1.0",
+  "productName": "Taut",
+  "private": true,
+  "description": "Taut desktop app (Electron + React + Tailwind + shadcn/ui)",
+  "main": "./out/main/index.js",
+  "author": "Taut",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build": "electron-vite build",
+    "lint": "eslint --cache .",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "pnpm run typecheck:node && pnpm run typecheck:web",
+    "clean": "rm -rf out dist .turbo node_modules .eslintcache",
+    "postinstall": "install-electron && electron-builder install-app-deps",
+    "package": "pnpm run build && electron-builder --dir",
+    "package:mac": "pnpm run build && electron-builder --mac",
+    "package:win": "pnpm run build && electron-builder --win",
+    "package:linux": "pnpm run build && electron-builder --linux"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.2",
+    "@electron-toolkit/utils": "^4.0.0",
+    "@taut/contract": "workspace:*",
+    "@taut/ui": "workspace:*",
+    "effect": "3.22.1",
+    "lucide-react": "^1.42.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@taut/eslint-config": "workspace:*",
+    "@types/node": "^22.19.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron": "^44.2.0",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^5.0.0",
+    "eslint": "^9.39.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.6"
+  }
+}

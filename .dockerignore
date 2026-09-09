@@ -1,0 +1,31 @@
+# Everything here is rebuilt inside the image or is irrelevant to it.
+**/node_modules
+**/dist
+**/out
+**/.turbo
+**/.vite
+**/.vite-temp
+**/.eslintcache
+**/*.tsbuildinfo
+
+.git
+.github
+.vscode
+
+# Runtime state: SQLite, dev master key, company folders. Lives in the volume.
+data
+.env
+.env.*
+!.env.example
+
+# Not part of the server image.
+docs/research
+apps/desktop
+# …but the workspace manifest must exist or --frozen-lockfile rejects the tree.
+!apps/desktop/package.json
+
+**/.DS_Store
+**/*.log
+Dockerfile
+.dockerignore
+docker-compose.yml

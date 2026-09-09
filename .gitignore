@@ -1,0 +1,33 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# build
+dist/
+out/
+.turbo/
+
+# caches
+.eslintcache
+*.tsbuildinfo
+
+# env
+.env
+.env.*
+!.env.example
+
+# runtime data (sqlite, dev master key, company folders)
+data/
+
+# misc
+.DS_Store
+*.log*
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# sqlite + dev master key anywhere in the tree (belt and braces; data/ is already ignored)
+*.db
+*.db-shm
+*.db-wal
+master.key

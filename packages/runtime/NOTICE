@@ -1,0 +1,33 @@
+@taut/runtime — third-party notices
+
+Parts of this package are ported from Sandcastle by Matt Pocock
+(https://github.com/mattpocock/sandcastle, npm `@ai-hero/sandcastle`), released
+under the MIT License. Specifically, the shape of the streaming `exec(cmd,
+{ onLine, stdin })` contract, the per-agent CLI command builders
+(`src/adapters/claudeCode.ts`, `codex.ts`, `cursor.ts`, `opencode.ts`) and the
+NDJSON line parsers follow Sandcastle's `src/AgentProvider.ts`; the agent image
+(`docker/agent.Dockerfile`) follows the lineage of Sandcastle's scaffolded
+`node:22-bookworm` + non-root `agent` (uid 1000) image. Sandcastle itself is not
+a dependency (docs/research/agent-sandboxes.md §2).
+
+MIT License
+
+Copyright (c) 2026 Matt Pocock
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

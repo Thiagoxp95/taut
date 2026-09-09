@@ -1,0 +1,31 @@
+{
+  "name": "@taut/memory",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./ingest": "./src/ingest.ts"
+  },
+  "scripts": {
+    "lint": "eslint --cache .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf .turbo node_modules .eslintcache"
+  },
+  "dependencies": {
+    "@effect/sql": "0.52.1",
+    "@effect/sql-sqlite-node": "0.53.0",
+    "@taut/contract": "workspace:*",
+    "effect": "3.22.1"
+  },
+  "devDependencies": {
+    "@effect/vitest": "0.30.0",
+    "@taut/eslint-config": "workspace:*",
+    "@taut/typescript-config": "workspace:*",
+    "@types/node": "26.5.0",
+    "eslint": "^9.39.1",
+    "typescript": "^5.9.3",
+    "vitest": "3.2.7"
+  }
+}

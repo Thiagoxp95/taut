@@ -1,0 +1,61 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "ui": "tui",
+  "globalEnv": [
+    "ELECTRON_RENDERER_URL",
+    "NODE_ENV",
+    "NODE_TLS_REJECT_UNAUTHORIZED",
+    "PORT",
+    "TAUT_AGENT_IMAGE",
+    "TAUT_CALL_MAX_PARTICIPANTS",
+    "TAUT_CALL_TOKEN_TTL_SECONDS",
+    "TAUT_COOKIE_SECURE",
+    "TAUT_DATA_DIR",
+    "TAUT_DEV_HOST_LOGIN",
+    "TAUT_DEV_INSTANCE_URL",
+    "TAUT_DEV_TS_HOST",
+    "TAUT_DEV_TS_PORT",
+    "TAUT_LIVEKIT_API_KEY",
+    "TAUT_LIVEKIT_API_SECRET",
+    "TAUT_LIVEKIT_INTERNAL_URL",
+    "TAUT_LIVEKIT_URL",
+    "TAUT_MACHINE_PROVIDER",
+    "TAUT_MASTER_KEY",
+    "TAUT_MAX_CONCURRENT_TASKS",
+    "TAUT_MAX_PENDING_SIGNALS",
+    "TAUT_MAX_SIGNAL_DEPTH",
+    "TAUT_MCP_COMMAND",
+    "TAUT_PUBLIC_URL",
+    "TAUT_SHOW_TOOLS",
+    "TAUT_SIGNAL_CHAIN_WINDOW_SECONDS",
+    "TAUT_SIGNAL_TICK_SECONDS",
+    "TAUT_TEST_CLAUDE",
+    "TAUT_TRIGGER_MAX_FIRES_PER_HOUR",
+    "TAUT_VAPID_PRIVATE_KEY",
+    "TAUT_VAPID_PUBLIC_KEY",
+    "TAUT_VAPID_SUBJECT",
+    "TAUT_WEB_DIST"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "out/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": {
+      "dependsOn": ["^lint"]
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"]
+    },
+    "clean": {
+      "cache": false
+    },
+    "test": {
+      "outputs": []
+    }
+  }
+}

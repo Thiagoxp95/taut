@@ -1,0 +1,40 @@
+{
+  "name": "@taut/taut-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "taut": "./dist/cli.js",
+    "taut-mcp": "./dist/mcp.js"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./protocol": "./src/protocol.ts",
+    "./inject": "./src/inject.ts"
+  },
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint --cache .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist .turbo node_modules .eslintcache"
+  },
+  "dependencies": {
+    "@effect/platform": "0.97.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "effect": "3.22.1",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@effect/vitest": "0.30.0",
+    "@taut/eslint-config": "workspace:*",
+    "@taut/typescript-config": "workspace:*",
+    "@types/node": "26.5.0",
+    "ajv": "8.17.1",
+    "eslint": "^9.39.1",
+    "tsup": "8.5.1",
+    "tsx": "4.23.13",
+    "typescript": "^5.9.3",
+    "vitest": "3.2.7"
+  }
+}

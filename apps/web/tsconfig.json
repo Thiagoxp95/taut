@@ -1,0 +1,12 @@
+{
+  "extends": "@taut/typescript-config/react-library.json",
+  "compilerOptions": {
+    "types": ["vite/client", "vite-plugin-pwa/client", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "vite.config.ts"],
+  "exclude": ["node_modules", "dist"]
+}
