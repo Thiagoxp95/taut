@@ -2180,3 +2180,65 @@ somewhere else.
 **Not verified:** never run against real Linear — no issue has actually been created in a
 workspace, and no agent has called either tool end to end. The Issues tab has not been rendered in a
 browser (login needs the owner's password).
+
+## Triggers and signals — routines that fire on events, and agents that wake themselves
+
+`docs/build-plan-triggers.md`, decisions D1–D28. A routine used to fire when a clock said so. It
+now fires when a `Trigger` says so, and a clock is one of two kinds of trigger.
+
+**Try it.** `/agents/<id>` → **Routines** → New routine → the **Trigger** tab → "A huddle ends" →
+pick a channel → save. Start a huddle in that channel, leave it, and the agent runs one turn in
+your DM with the huddle's channel, duration, participants and chat thread already in its prompt.
+
+Or the timer: DM an agent "remind me in three minutes to buy watermelon". It calls `emit_signal`,
+answers, and its process exits. Three minutes later the wake lands **in that same thread**, the
+runtime resumes with `--resume <the same session id>`, and the agent finishes what it promised. A
+muted "Reminder at 6:32 PM · Cancel" row sits under the composer until it fires.
+
+**Shape.** `Routine.schedule` + `Routine.timezone` collapsed into one `Routine.trigger`, a union of
+`{_tag:'schedule'}` and `{_tag:'event'}` (D1). An event trigger calls the very `fire()` the
+30-second clock tick calls, so it still posts `@handle <prompt>` as the owner and the ordinary
+`Scheduler` makes the Task — one dispatch path, and every §9 gate still applies (D2).
+
+Each `EventTrigger` variant's `_tag` **is** the `EventType` it listens for, so `matchesEvent` is a
+switch on the same literal the bus carries (D3). Six of them: `call.ended`, `call.started`,
+`message.created`, `agent.task.failed`, `project.issue.created`, `signal.emitted`. Signals add
+exactly one bus event; the custom name is data, never a new `EventType`, so the `Event` union stays
+closed (D16).
+
+`call.ended` carries only `{callId, channelId, endedAt}`, so a "ignore huddles under a minute"
+filter is unsatisfiable from the event alone. `matchesEvent(trigger, event, facts?)` takes the
+duration as a fact the runner already holds, and **fails closed** when it is missing.
+
+Loop safety is structural, not heuristic. An event whose actor is the routine's own agent never
+fires that routine (D6); a routine fires at most 20 times an hour (D7); an overlapping previous run
+skips (D8). Signals get the opposite of D6 on purpose (D27) and three other valves instead: depth
+is **time-scoped**, so a signal delivered within 60s of the task that emitted it inherits depth+1
+and is refused past 10, while one delivered later resets to 0 (D23) — a watcher re-arming every
+three minutes runs forever, ten hops in a minute is stopped. Signal wakes count toward the existing
+`TURN_CAP` of 20, and a wake that would exceed it cancels the signal with the existing note rather
+than queueing (D24). At most 50 armed signals per agent (D25).
+
+Migration `0031` moves `schedule_json`+`timezone` into `trigger_json`, backfilling in pure SQL, and
+adds the denormalised `trigger_kind`/`trigger_event` columns SQLite needs to index the hot path.
+`0032` adds `signals` and `tasks.signal_id`. Two new daemons: `triggerRunner` over
+`Bus.streamAll()`, and `signalRunner` on a 5-second tick. Broadcast delivery is *only* a publish on
+the bus — the trigger runner picks it up through `SignalTrigger`, so the two paths meet at the bus
+and nowhere else. Three agent tools: `emit_signal`, `list_signals`, `cancel_signal`, reaching the
+agent through `packages/taut-mcp`.
+
+**Tests.** 544 green across the workspace (`@taut/server` 271, `@taut/contract` 132), including the
+watermelon case end to end on a stubbed clock: the task emits, the task ends, the tick at +3 min
+posts into the same thread, and the wake relaunches the runtime against a single `agent_sessions`
+row. Also: a huddle under `minSeconds` fires nothing; an agent's own message never fires its own
+`message.created` trigger; eleven immediate hops stopped at ten while the same chain two minutes
+apart is never capped; the 51st armed signal refused; a thread at `TURN_CAP` cancelling the signal
+with a note; a broadcast waking a second agent through its `SignalTrigger` and not one whose names
+do not match.
+
+**Not verified:** nothing has been clicked. No browser ran against the new Routines tab, the
+Trigger picker, or the pending-reminder row — the layout, the popovers inside the dialog's scroll
+container and the keyboard roving are all unexercised. `call.ended` triggers have never run against
+a real LiveKit; the tests insert `calls` rows directly. `Signals.emit` from a human is supported by
+the schema and has no caller. There is no `taut signal` CLI subcommand — the MCP surface is
+complete, the human shortcut is not.

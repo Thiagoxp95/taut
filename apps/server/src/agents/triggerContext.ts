@@ -59,7 +59,7 @@ export class TriggerContext extends Effect.Service<TriggerContext>()('TriggerCon
       channels.find(companyId, channelId).pipe(
         Effect.map(
           Option.match({
-            onNone: () => channelId as string,
+            onNone: () => String(channelId),
             onSome: (channel) => (channel.kind === 'dm' ? 'the DM' : `#${channel.name}`)
           })
         )
@@ -68,7 +68,7 @@ export class TriggerContext extends Effect.Service<TriggerContext>()('TriggerCon
     const agentHandle = (companyId: CompanyId, agentId: AgentId): Effect.Effect<string> =>
       agents.byId(companyId, agentId).pipe(
         Effect.map((agent) => `@${agent.handle}`),
-        Effect.catchAll(() => Effect.succeed(agentId as string))
+        Effect.catchAll(() => Effect.succeed(String(agentId)))
       )
 
     /** A member of either kind as the handle a human would type. */
@@ -82,7 +82,7 @@ export class TriggerContext extends Effect.Service<TriggerContext>()('TriggerCon
         : users.byId(id as UserId).pipe(
             Effect.map(
               Option.match({
-                onNone: () => id as string,
+                onNone: () => String(id),
                 onSome: (user) => `@${userHandle(user.email)}`
               })
             )

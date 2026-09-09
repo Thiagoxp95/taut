@@ -3,7 +3,7 @@ import { Schema } from 'effect'
 
 import { Signal, SignalStatus } from '../domain/signal.js'
 import { Forbidden, NotFound } from '../errors.js'
-import { AgentId, SignalId } from '../ids.js'
+import { AgentId, MessageId, SignalId } from '../ids.js'
 import { Page, PageQuery } from './common.js'
 import { Authentication } from './middleware.js'
 
@@ -17,7 +17,12 @@ export const ListSignalsQuery = Schema.Struct({
   /** The emitting agent. The thread affordance passes it to show one agent's pending wakes. */
   agentId: Schema.optional(AgentId),
   /** Absent = every status; the thread row asks for `pending`. */
-  status: Schema.optional(SignalStatus)
+  status: Schema.optional(SignalStatus),
+  /**
+   * The thread a signal will wake (D20). The pending-reminder row under a composer asks for its
+   * own thread, so a company with hundreds of armed signals still sends one small page.
+   */
+  threadId: Schema.optional(MessageId)
 })
 
 const SignalPath = Schema.Struct({ signalId: SignalId })

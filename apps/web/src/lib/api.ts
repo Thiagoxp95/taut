@@ -1610,17 +1610,18 @@ const SIGNAL_LIMIT = 100
  */
 export function useSignals(threadId: MessageId | undefined): readonly Signal[] {
   const query = useEffectQuery<PageOf<Signal>>(
-    qk.signalList('pending'),
-    call((api) => api.signals.list({ urlParams: { limit: SIGNAL_LIMIT, status: 'pending' } })),
+    qk.signalList(`pending:${threadId ?? 'none'}`),
+    call((api) =>
+      api.signals.list({ urlParams: { limit: SIGNAL_LIMIT, status: 'pending', threadId } })
+    ),
     // A background affordance nobody asked for: a failure hides the row, it does not raise a toast.
     { enabled: threadId !== undefined, meta: { silent: true } }
   )
-  const items = query.data?.items
-  return React.useMemo(() => {
-    if (threadId === undefined || items === undefined) return []
-    return items.filter((signal) => signal.threadId === threadId)
-  }, [items, threadId])
+  return query.data?.items ?? EMPTY_SIGNALS
 }
+
+/** A stable empty array, so a thread with no reminders never re-renders its composer. */
+const EMPTY_SIGNALS: readonly Signal[] = []
 
 /** "Actually, never mind" — half of what a reminder is for (D26). Already-gone is a no-op. */
 export function useCancelSignal() {

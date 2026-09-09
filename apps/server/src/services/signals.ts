@@ -88,6 +88,8 @@ export interface ListSignalsInput {
   /** The *emitting* member, not the target: "what has this agent armed". */
   readonly agentId?: AgentId | undefined
   readonly status?: SignalStatus | undefined
+  /** The thread the signal will wake (D20) — what the composer's pending row asks for. */
+  readonly threadId?: MessageId | undefined
   readonly cursor?: string | undefined
   readonly limit?: number | undefined
 }
@@ -128,6 +130,7 @@ export class Signals extends Effect.Service<Signals>()('Signals', {
         companyId: CompanyId,
         emittedById: Schema.NullOr(MemberId),
         status: Schema.NullOr(SignalStatus),
+        threadId: Schema.NullOr(MessageId),
         after: Schema.NullOr(SignalId),
         limit: Schema.Number
       }),
@@ -137,6 +140,7 @@ export class Signals extends Effect.Service<Signals>()('Signals', {
         WHERE company_id = ${r.companyId}
           AND (${r.emittedById} IS NULL OR emitted_by_id = ${r.emittedById})
           AND (${r.status} IS NULL OR status = ${r.status})
+          AND (${r.threadId} IS NULL OR thread_id = ${r.threadId})
           AND (${r.after} IS NULL OR (deliver_at, rowid) > (
             SELECT a.deliver_at, a.rowid FROM signals a WHERE a.id = ${r.after}))
         ORDER BY deliver_at ASC, rowid ASC
@@ -357,6 +361,7 @@ export class Signals extends Effect.Service<Signals>()('Signals', {
           companyId: who.companyId,
           emittedById: input.agentId ?? null,
           status: input.status ?? null,
+          threadId: input.threadId ?? null,
           after: Option.getOrNull(after),
           limit: limit + 1
         })
@@ -416,6 +421,7 @@ export class Signals extends Effect.Service<Signals>()('Signals', {
           companyId,
           emittedById,
           status: status ?? null,
+          threadId: null,
           after: null,
           limit: MAX_LIMIT
         }).pipe(Effect.map((rows) => rows.map(toSignal)))

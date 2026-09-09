@@ -36,7 +36,7 @@
 import type { EventFacts, Routine } from '@taut/contract/domain'
 import { TriggerEventType, matchesEvent } from '@taut/contract/domain'
 import type { Event } from '@taut/contract/events'
-import type { AgentId, CompanyId, MemberId, RoutineId } from '@taut/contract/ids'
+import type { CompanyId, MemberId, RoutineId } from '@taut/contract/ids'
 import { DateTime, Duration, Effect, Option, Schema, Stream } from 'effect'
 import { AppConfig } from '../config.js'
 import { Bus } from '../realtime/bus.js'
@@ -147,9 +147,7 @@ export class TriggerRunner extends Effect.Service<TriggerRunner>()('TriggerRunne
       if (event.type === 'signal.emitted') return false
       const actor = actorOf(event)
       return (
-        Option.isSome(actor) &&
-        actor.value.kind === 'agent' &&
-        (actor.value.id as AgentId) === routine.agentId
+        Option.isSome(actor) && actor.value.kind === 'agent' && actor.value.id === routine.agentId
       )
     }
 
