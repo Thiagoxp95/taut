@@ -1,6 +1,6 @@
 # Desktop update verification
 
-Date: 2026-09-10. This file separates implemented behavior from a completed installed-app upgrade.
+Date: 2026-09-10. The signed 1.0.0 → 1.0.1 installed-app upgrade completed successfully on an Apple Silicon Mac.
 
 ## Source and publication
 
@@ -22,12 +22,28 @@ Date: 2026-09-10. This file separates implemented behavior from a completed inst
 - [macOS CI run 34513452519](https://github.com/Thiagoxp95/taut/actions/runs/34513452519) passed version validation and both native architecture jobs with unsigned test builds. Its draft-release job was correctly skipped for a manual unsigned run.
 - The arm64 CI artifact was downloaded. Its DMG and ZIP both passed the published SHA-256 checks. The ZIP's actual packaged Taut executable launched in an isolated profile, reported version `1.0.0` and `app.isPackaged === true`, exposed the setup/update preload, and kept updates disabled for the unsigned build. Ready/dismiss/retry UI passed using explicit fixture events. This also verifies that the packaged runtime includes its dependencies.
 - Self-host and Railway CI passed for the implementation commits, including `6270b97`.
-- The public download page and its release-status script both returned HTTP 200 anonymously. It currently reports that the first release is being prepared, matching GitHub's empty release list.
+- The public download page and its release-status script both returned HTTP 200 anonymously. A real browser now reports `v1.0.0 · Available for Apple Silicon and Intel`, with both stable download links enabled.
 
-## Remaining release proof
+## Signed 1.0.0 baseline
 
-The owner requested a signed `1.0.0` followed by `1.0.1` and a real installed-app upgrade. Neither version has been published yet. All five signing/notarization secrets are now configured. The matching issuer ID was read from App Store Connect beside key 69434JWN58, and Apple notarization authentication succeeded. Signed release execution and the real upgrade test follow below.
+- All five signing/notarization secrets are configured in GitHub Actions. Apple API authentication succeeded. No private key, signing password, or token was committed or shipped.
+- [Signed 1.0.0 CI](https://github.com/Thiagoxp95/taut/actions/runs/34514827879) passed both native architecture jobs and draft creation. Both builds were notarized and passed signature, Gatekeeper, metadata, and checksum validation.
+- [1.0.0](https://github.com/Thiagoxp95/taut/releases/tag/v1.0.0) was published with all 14 assets. The Apple Silicon DMG was downloaded anonymously through the same stable URL used by the website. SHA-256: `be5c30f189453c697f0f824cd05a115e8e8ecd14b0a6961df1a19e5369981115`.
+- The DMG passed its image checksum. Its installed `/Applications/Taut.app` passed `codesign --verify --deep --strict`, `stapler validate`, and Gatekeeper (`accepted`, `Notarized Developer ID`). Its baseline installed version was `1.0.0`.
+- The real app connected to an isolated production server at `http://127.0.0.1:50642`. UI signup and company creation completed: user “Desktop Update Test”, company “Release Upgrade Test”. The workspace shows Connected. The original user profile was safely backed up before testing.
+- Baseline server PID: `64806`; `/api/health` reports `{"ok":true,"version":"0.0.0"}`. Server and web artifacts remain fixed throughout the desktop upgrade.
 
-After configuring that ID: tag the final reviewed 1.0.0 commit, wait for both signed CI builds and artifact verification, publish the draft, install the arm64 DMG in Applications, and connect an isolated profile to a Taut server. Record the version, instance URL and session before publishing 1.0.1. Confirm the card downloads the new release, click Restart to update, and verify version 1.0.1 plus the same URL/session afterward. Verify both feeds and website downloads anonymously. Desktop updates must leave server version and agent processes unchanged.
+## Completed back-to-back upgrade
 
-Use [the release guide](macos-release.md) for commands and required signature checks. Never substitute a fixture card or an unsigned build for the signed upgrade proof.
+- Commit `93deac8` bumps only the desktop version to `1.0.1` and changes the connection heading to “Connect to your workspace”. Local release/updater tests, desktop typechecks, and production build pass.
+- [Signed 1.0.1 CI](https://github.com/Thiagoxp95/taut/actions/runs/34516071642) passed every job. Both native architecture builds were signed, notarized, and validated. Self-host and Railway CI passed for the same commit.
+- [1.0.1](https://github.com/Thiagoxp95/taut/releases/tag/v1.0.1) was published with all 14 assets while the installed 1.0.0 client stayed open. Before publication, its native check correctly reported 1.0.0 as current.
+- After publication, **Taut → Check for Updates…** found 1.0.1. The actual workspace card displayed live download progress, then **Taut 1.0.1 is ready**. The native ready dialog was dismissed with Later so the actual workspace card's **Restart to update** button could drive installation. No fixture events, feed overrides, replacement app copies, or manual relaunch were used.
+- Clicking that card exited the app. Squirrel installed the downloaded update and relaunched Taut automatically. The installed bundle and the live native About panel both reported **1.0.1**. Client PID changed from `12877` to `69908`.
+- The relaunched app returned directly to the same “Release Upgrade Test” company as “Desktop Update Test” (Owner), showing Connected, without login or onboarding. The saved instance file's SHA-256 fingerprint was unchanged. The connection screen retained `http://127.0.0.1:50642` and showed the new **Connect to your workspace** heading.
+- Server PID `64806` remained alive throughout. `/api/health` still reported `{"ok":true,"version":"0.0.0"}`. No server rebuild/restart occurred during the upgrade. This fixture had no running agents or calls, so this test does not independently prove preservation of an active agent run or call cleanup.
+- The updated installed app again passed strict deep code-signature verification, stapler validation, and Gatekeeper (`accepted`, `Notarized Developer ID`).
+- A real anonymous browser reported **v1.0.1 · Available for Apple Silicon and Intel** on the public download page. Both download URLs returned HTTP 200 with nonempty DMGs; both anonymous update feeds returned version 1.0.1. Intel execution and signing checks ran on native Intel CI; the interactive upgrade was tested on Apple Silicon.
+- The test app was quit and the original user's desktop profile restored. The signed 1.0.1 app remains installed in `/Applications/Taut.app`. The isolated server was stopped after completing the checks.
+
+See [the release guide](macos-release.md) for repeating the release and installed-app verification procedure.

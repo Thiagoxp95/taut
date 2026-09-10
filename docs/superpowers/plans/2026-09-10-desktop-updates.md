@@ -9,11 +9,13 @@
 - [x] Commit all existing work, integrate remote main, and push.
 - [x] Add a tested updater controller and trusted main-frame IPC. Check at launch and periodically, download in the background, install only on explicit restart, handle retry and development builds.
 - [x] Add accessible update cards on the connection screen and workspace, plus native menu fallback when the server is unavailable or older.
-- [x] Implement architecture-specific update metadata, signed ZIPs/DMGs, stable download aliases and checksum validation. Public signed artifacts remain pending below.
+- [x] Implement architecture-specific update metadata, signed ZIPs/DMGs, stable download aliases and checksum validation.
 - [x] Add MIT license and a repository-owned public download page explaining separate server hosting.
-- [ ] Configure existing signing credentials as repository secrets without exposing them, build 1.0.0 in CI, publish and install it.
-- [ ] Make a small visible 1.0.1 change, run CI, publish, and verify real update/download/restart/version/session persistence.
+- [x] Configure existing signing credentials as repository secrets without exposing them, build 1.0.0 in CI, publish and install it.
+- [x] Make a small visible 1.0.1 change, run CI, publish, and verify real update/download/restart/version/session persistence.
 
 **Feedback loops:** `pnpm --filter @taut/desktop test:updater`, `test:release`, desktop and web typechecks/builds, GitHub Actions artifacts/signatures, and real installed-app update. Unit tests cover state transitions and failed downloads; signed CI and the installed-app test establish behavior mocks cannot prove.
 
 **Release boundary:** Stable Mac arm64/x64 releases only. No server auto-upgrade or embedded server. Repository publicity and published releases are required for anonymous downloads; no GitHub token is shipped in the client.
+
+**Result:** Signed 1.0.0 and 1.0.1 are public. The installed Apple Silicon client downloaded 1.0.1 and restarted through its real update card, retaining the server URL and authenticated workspace. Both native architecture CI jobs and both deployment workflows passed. Details: [verification evidence](../../desktop-update-verification.md).
