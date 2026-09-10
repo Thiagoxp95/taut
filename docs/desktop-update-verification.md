@@ -26,7 +26,7 @@ Date: 2026-09-10. This file separates implemented behavior from a completed inst
 
 ## Remaining release proof
 
-The owner requested a signed `1.0.0` followed by `1.0.1` and a real installed-app upgrade. Neither version has been published yet. The four signing/key secrets are configured; the matching App Store Connect issuer ID is still needed for `APPLE_API_ISSUER`.
+The owner requested a signed `1.0.0` followed by `1.0.1` and a real installed-app upgrade. Neither version has been published yet. All five signing/notarization secrets are now configured. The matching issuer ID was read from App Store Connect beside key 69434JWN58, and Apple notarization authentication succeeded. Signed release execution and the real upgrade test follow below.
 
 After configuring that ID: tag the final reviewed 1.0.0 commit, wait for both signed CI builds and artifact verification, publish the draft, install the arm64 DMG in Applications, and connect an isolated profile to a Taut server. Record the version, instance URL and session before publishing 1.0.1. Confirm the card downloads the new release, click Restart to update, and verify version 1.0.1 plus the same URL/session afterward. Verify both feeds and website downloads anonymously. Desktop updates must leave server version and agent processes unchanged.
 
