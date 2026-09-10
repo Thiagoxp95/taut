@@ -3,7 +3,13 @@ import type { DesktopUpdateBridge, DesktopUpdateState } from '@taut/contract/des
 import { Button } from './button'
 
 /** The optional bridge keeps browser clients and older desktop versions compatible. */
-export function DesktopUpdateCard({ bridge }: { bridge?: DesktopUpdateBridge | undefined }) {
+export function DesktopUpdateCard({
+  bridge,
+  placement = 'floating'
+}: {
+  bridge?: DesktopUpdateBridge | undefined
+  placement?: 'floating' | 'inline'
+}) {
   const [state, setState] = useState<DesktopUpdateState>()
   const [dismissed, setDismissed] = useState<string>()
   const [error, setError] = useState<string>()
@@ -41,7 +47,7 @@ export function DesktopUpdateCard({ bridge }: { bridge?: DesktopUpdateBridge | u
   return (
     <section
       aria-label="Desktop update"
-      className="fixed right-4 bottom-4 z-50 w-80 max-w-[calc(100vw-2rem)] rounded-xl border bg-popover p-4 text-popover-foreground shadow-lg"
+      className={`${placement === 'inline' ? 'w-full shrink-0' : 'fixed right-4 bottom-4 z-50 w-80 max-w-[calc(100vw-2rem)]'} rounded-xl border bg-popover p-4 text-popover-foreground shadow-lg`}
     >
       <div role="status" aria-live="polite">
         <h2 className="text-sm font-semibold">

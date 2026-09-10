@@ -48,7 +48,7 @@ export default function App(): React.JSX.Element {
   }
 
   return (
-    <main className="flex h-full flex-col bg-background text-foreground">
+    <main className="flex h-full flex-col overflow-y-auto bg-background text-foreground">
       <div className="taut-titlebar" />
       <div className="flex flex-1 flex-col justify-center gap-6 px-9 pb-10">
         <header className="flex flex-col gap-1.5">
@@ -93,8 +93,8 @@ export default function App(): React.JSX.Element {
             {busy ? 'Checking…' : 'Connect'}
           </Button>
         </form>
+        <DesktopUpdateCard bridge={window.tautSetup?.updates} placement="inline" />
       </div>
-      <DesktopUpdateCard bridge={window.tautSetup?.updates} />
     </main>
   )
 }

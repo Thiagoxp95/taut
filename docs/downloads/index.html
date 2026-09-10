@@ -179,6 +179,7 @@
           flex-direction: column;
         }
       }
+      a[aria-disabled="true"] { opacity: .55; cursor: default; }
     </style>
   </head>
   <body>
@@ -196,7 +197,7 @@
       <div class="actions">
         <a
           class="button"
-          href="https://github.com/Thiagoxp95/taut/releases/latest/download/Taut-mac-arm64.dmg"
+          id="download-arm64" aria-disabled="true"
           ><span aria-hidden="true">↓</span> Download for Mac
           <span style="font-weight: 400">· Apple Silicon</span></a
         >
@@ -208,13 +209,15 @@
       </div>
       <p class="meta">
         Using an Intel Mac?
-        <a href="https://github.com/Thiagoxp95/taut/releases/latest/download/Taut-mac-x64.dmg"
+        <a id="download-x64" aria-disabled="true"
           >Download for Intel</a
-        ><br /><a href="https://github.com/Thiagoxp95/taut/releases/latest"
+        ><br /><a href="https://github.com/Thiagoxp95/taut/releases"
           >Release notes &amp; checksums</a
         >
         · Signed and notarized for macOS
       </p>
+      <p id="release-status" class="meta" role="status">Checking the latest release…</p>
+      <noscript><p class="meta">Visit <a href="https://github.com/Thiagoxp95/taut/releases">GitHub Releases</a> to see available downloads.</p></noscript>
       <div class="steps">
         <section>
           <span class="step-number">01 / INSTALL</span>
@@ -250,5 +253,6 @@
         <a href="https://github.com/Thiagoxp95/taut/blob/main/LICENSE">MIT license</a></span
       ><span>The desktop app requires a running Taut server.</span>
     </footer>
+    <script type="module" src="./release.js"></script>
   </body>
 </html>

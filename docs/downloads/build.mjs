@@ -4,3 +4,5 @@ await copyFile(
   new URL('./index.html', import.meta.url),
   new URL('./dist/index.html', import.meta.url)
 )
+
+await copyFile(new URL('./release.js', import.meta.url), new URL('./dist/release.js', import.meta.url))
