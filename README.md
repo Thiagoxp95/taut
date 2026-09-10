@@ -58,7 +58,7 @@ and first Railway deployment are still pending. See the guide for verification s
 
 ## Desktop app
 
-[Download Taut for Mac](https://taut-downloads.quick-cove-9010.chatgpt.site) · [GitHub releases](https://github.com/Thiagoxp95/taut/releases/latest) · [MIT license](LICENSE)
+[Download Taut for Mac](https://taut-downloads.manga4671.chatgpt.site) · [GitHub releases](https://github.com/Thiagoxp95/taut/releases/latest) · [MIT license](LICENSE)
 
 The desktop client is a separate download from the server. Install it, enter your server URL,
 and sign in to your workspace. Signed builds download desktop updates in the background and
