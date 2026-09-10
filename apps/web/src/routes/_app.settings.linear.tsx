@@ -1,3 +1,4 @@
+import { MemberProfileTrigger } from '@/components/profile-card'
 import * as React from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import {
@@ -7,7 +8,7 @@ import {
   SquareKanbanIcon,
   TriangleAlertIcon,
   UnplugIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { LinearUser, User, UserId } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 import { Input } from '@taut/ui/components/input'
@@ -230,7 +231,9 @@ function PersonRow({
     <SettingsRow
       label={
         <span className="flex min-w-0 items-center gap-3">
-          <LinearFace user={user} />
+          <MemberProfileTrigger memberId={user.member}>
+            <LinearFace user={user} />
+          </MemberProfileTrigger>
           <span className="min-w-0 truncate">{user.name}</span>
         </span>
       }
@@ -259,7 +262,13 @@ function PersonRow({
             {members.map((member) => (
               <SelectItem key={member.id} value={member.id}>
                 <span className="flex items-center gap-2">
-                  <EntityAvatar kind="user" size="sm" name={member.name} avatar={member.avatar} />
+                  <EntityAvatar
+                    memberId={member.id}
+                    kind="user"
+                    size="sm"
+                    name={member.name}
+                    avatar={member.avatar}
+                  />
                   <span className="truncate">{member.name}</span>
                 </span>
               </SelectItem>

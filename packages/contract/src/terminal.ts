@@ -87,9 +87,18 @@ export const TerminalControl = Schema.TaggedStruct('control', {
   pause: Schema.optional(Schema.Boolean)
 })
 
+/** Browser viewport in CSS pixels, independent of terminal rows/columns. */
+export const BrowserViewport = Schema.Struct({
+  width: Schema.Int.pipe(Schema.between(1, 4096)),
+  height: Schema.Int.pipe(Schema.between(1, 4096))
+})
+export type BrowserViewport = typeof BrowserViewport.Type
+export const TerminalViewport = Schema.TaggedStruct('viewport', BrowserViewport.fields)
+
 export const TerminalClientFrame = Schema.Union(
   TerminalStdin,
   TerminalResize,
+  TerminalViewport,
   TerminalInput,
   TerminalControl
 )
@@ -112,12 +121,27 @@ export const TerminalBrowserFrame = Schema.TaggedStruct('frame', {
   width: Schema.Int,
   height: Schema.Int
 })
+/** The browser's open pages and the page currently shown by the live view. */
+export const TerminalBrowserTabs = Schema.TaggedStruct('tabs', {
+  tabs: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      title: Schema.String,
+      url: Schema.String
+    })
+  ),
+  activeTabId: Schema.NullOr(Schema.String)
+})
+export type TerminalBrowserTabs = typeof TerminalBrowserTabs.Type
+
 /**
  * Who drives the browser right now: `holder` is the viewer holding control (`null` =
  * nobody, the agent's own tools drive), `paused` whether the agent's runtime is frozen
  * for it (D15). `reason` explains a refused or ended hold.
  */
 export const TerminalControlState = Schema.TaggedStruct('control', {
+  /** This socket owns the hold; another view of the same user does not. */
+  owned: Schema.optional(Schema.Boolean),
   holder: Schema.NullOr(UserId),
   paused: Schema.Boolean,
   reason: Schema.optional(Schema.String)
@@ -138,6 +162,7 @@ export const TerminalServerFrame = Schema.Union(
   TerminalExit,
   TerminalError,
   TerminalBrowserFrame,
+  TerminalBrowserTabs,
   TerminalControlState,
   TerminalBrowserState
 )

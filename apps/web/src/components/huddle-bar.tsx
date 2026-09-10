@@ -1,5 +1,6 @@
 import * as React from 'react'
 import {
+  ChevronDownIcon,
   HeadphonesIcon,
   Loader2Icon,
   MicIcon,
@@ -8,7 +9,7 @@ import {
   PhoneOffIcon,
   VideoIcon,
   VideoOffIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { ChannelId } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@taut/ui/components/tooltip'
@@ -36,6 +37,7 @@ function Speaker({ participant }: { participant: HuddleParticipant }) {
       )}
     >
       <EntityAvatar
+        memberId={participant.memberId}
         avatar={member?.avatar}
         kind={participant.kind}
         face={member?.face}
@@ -111,7 +113,7 @@ export function HuddleBar() {
         : 'Connecting…'
 
   return (
-    <div className="flex shrink-0 items-center gap-3 border-t bg-sidebar px-4 py-2 text-sidebar-foreground">
+    <div className="flex shrink-0 flex-wrap items-center gap-3 border-t bg-sidebar px-4 py-2 text-sidebar-foreground">
       <div className="flex min-w-0 items-center gap-2">
         <HeadphonesIcon className="size-4 shrink-0 text-muted-foreground" />
         <span className="truncate text-xs font-medium">{label}</span>
@@ -187,29 +189,64 @@ export function HuddleControls({ onLeave }: { onLeave: () => void }) {
  * The channel and DM header entry point. One huddle per channel (D1), so there is no "start"
  * next to "join": the same button opens the room or walks into the one already running.
  */
-export function HuddleButton({ channelId }: { channelId: ChannelId }) {
+export function HuddleButton({
+  channelId,
+  iconOnly = false
+}: {
+  channelId: ChannelId
+  iconOnly?: boolean
+}) {
   const { enabled, call, joining, leave } = useHuddle()
   const open = useChannelCall(channelId)
+  const channel = useChannel(channelId)
+  const dm = useDmView(channelId)
   // D1: the button no longer joins anything. It opens the dialog, and the dialog decides.
   const [prejoin, setPrejoin] = React.useState(false)
 
-  if (!enabled) return null
+  // Wait for the DM recipient to resolve: agents have no voice support.
+  if (
+    !enabled ||
+    channel === undefined ||
+    (channel.kind === 'dm' && dm?.partner?.kind !== 'user')
+  ) {
+    return null
+  }
 
   const here = call?.channelId === channelId
   const busy = joining === channelId
   const count = open?.participants.length ?? 0
+  const label = here ? 'Leave huddle' : count > 0 ? `Join huddle · ${count}` : 'Start huddle'
 
   return (
     <>
-      <Button
-        variant={here ? 'secondary' : 'ghost'}
-        size="sm"
-        disabled={busy}
-        onClick={() => (here ? leave() : setPrejoin(true))}
-      >
-        {busy ? <Loader2Icon className="animate-spin" /> : <HeadphonesIcon />}
-        {here ? 'Leave' : count > 0 ? `Join · ${count}` : 'Huddle'}
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant={here ? 'secondary' : 'ghost'}
+            size="sm"
+            className={iconOnly ? 'h-9 gap-1 px-2' : undefined}
+            aria-label={label}
+            disabled={busy}
+            onClick={() => (here ? leave() : setPrejoin(true))}
+          >
+            {busy ? (
+              <Loader2Icon className="animate-spin" />
+            ) : (
+              <HeadphonesIcon className={iconOnly ? 'size-5' : undefined} />
+            )}
+            {iconOnly ? (
+              <ChevronDownIcon className="size-3" />
+            ) : here ? (
+              'Leave'
+            ) : count > 0 ? (
+              `Join · ${count}`
+            ) : (
+              'Huddle'
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
       <HuddlePrejoin channelId={channelId} open={prejoin} onOpenChange={setPrejoin} />
     </>
   )
@@ -236,7 +273,7 @@ export function HuddleReturnBar() {
       : `#${channel?.name ?? 'huddle'}`
 
   return (
-    <div className="flex shrink-0 items-center gap-3 border-t bg-sidebar px-4 py-2 text-sidebar-foreground">
+    <div className="flex shrink-0 flex-wrap items-center gap-3 border-t bg-sidebar px-4 py-2 text-sidebar-foreground">
       <HeadphonesIcon className="size-4 shrink-0 text-emerald-500" />
       <span className="min-w-0 truncate text-xs font-medium">You are in a huddle in {label}</span>
       <Button

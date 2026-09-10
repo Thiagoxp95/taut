@@ -1,6 +1,7 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'tw-shimmer';
+@import './sidebar.css';
 
 /* Scan this package's sources; consuming apps are auto-detected from their own cwd. */
 @source '../**/*.{ts,tsx}';

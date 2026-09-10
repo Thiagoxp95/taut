@@ -38,6 +38,29 @@ export const AgentsLive = HttpApiBuilder.group(ServerApi, 'agents', (handlers) =
         yield* agents.delete(yield* CurrentUser, path.agentId)
       })
     )
+    .handle('addConnector', ({ path, payload }) =>
+      Effect.gen(function* () {
+        const agents = yield* Agents
+        return yield* agents.addConnector(yield* CurrentUser, path.agentId, payload)
+      })
+    )
+    .handle('updateConnector', ({ path, payload }) =>
+      Effect.gen(function* () {
+        const agents = yield* Agents
+        return yield* agents.updateConnector(
+          yield* CurrentUser,
+          path.agentId,
+          path.connectorId,
+          payload
+        )
+      })
+    )
+    .handle('removeConnector', ({ path }) =>
+      Effect.gen(function* () {
+        const agents = yield* Agents
+        yield* agents.removeConnector(yield* CurrentUser, path.agentId, path.connectorId)
+      })
+    )
     .handle('getSkill', ({ path }) =>
       Effect.gen(function* () {
         const agents = yield* Agents

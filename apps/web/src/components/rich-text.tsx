@@ -188,7 +188,7 @@ export function RichText({ source, className, caret = false }: RichTextProps) {
   return (
     <div
       className={cn(
-        'taut-rich text-sm leading-relaxed break-words',
+        'taut-rich text-[15px] leading-[1.46667] break-words',
         caret && 'taut-caret',
         className
       )}

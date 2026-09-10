@@ -9,6 +9,7 @@ import {
   KeyRoundIcon,
   MessageSquareIcon,
   PlusIcon,
+  PlugIcon,
   ScrollTextIcon,
   ServerIcon,
   SparklesIcon,
@@ -19,7 +20,7 @@ import {
   TimerIcon,
   UserIcon,
   XIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type {
   AgentId,
   Department,
@@ -42,6 +43,7 @@ import {
 } from '@taut/ui/components/select'
 import { Dialog, DialogContent } from '@taut/ui/components/dialog'
 import { AddSecretForm } from '@/components/add-secret-form'
+import { AgentConnectorsTab } from '@/components/agent-connectors'
 import { AgentFilesTab } from '@/components/agent-files'
 import { AgentReposTab } from '@/components/agent-repos'
 import { AgentRoutinesTab } from '@/components/agent-routines'
@@ -148,9 +150,13 @@ function DepartmentMembership({
       )}
 
       {available.length === 0 || !canManage ? null : (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Select value={picked} onValueChange={setPicked}>
-            <SelectTrigger size="sm" className="flex-1" aria-label="Department to join">
+            <SelectTrigger
+              size="sm"
+              className="min-w-0 flex-1 basis-40"
+              aria-label="Department to join"
+            >
               <SelectValue placeholder="Add to a department" />
             </SelectTrigger>
             <SelectContent>
@@ -413,7 +419,7 @@ function AgentRoute() {
     <>
       <PageHeader
         title={
-          <span className="flex items-center gap-2">
+          <span className="flex min-w-0 items-center gap-2 [&>span]:shrink-0">
             {agent.name}
             <span className="font-normal text-muted-foreground">@{agent.handle}</span>
             {agent.status === 'paused' ? <Badge variant="outline">paused</Badge> : null}
@@ -429,7 +435,15 @@ function AgentRoute() {
           </span>
         }
         description={`${agent.role || 'No role set'} · ${presenceLabel(presence)}`}
-        icon={<EntityAvatar kind="agent" face={avatarFace} name={agent.name} size="md" />}
+        icon={
+          <EntityAvatar
+            memberId={agent.id}
+            kind="agent"
+            face={avatarFace}
+            name={agent.name}
+            size="md"
+          />
+        }
         actions={
           <>
             <Button asChild variant="ghost" size="sm">
@@ -487,6 +501,9 @@ function AgentRoute() {
               </SettingsTab>
               <SettingsTab value="skills" icon={<SparklesIcon />}>
                 Skills
+              </SettingsTab>
+              <SettingsTab value="connectors" icon={<PlugIcon />}>
+                Connectors
               </SettingsTab>
               <SettingsTab value="repositories" icon={<FolderGitIcon />}>
                 Repositories
@@ -570,7 +587,13 @@ function AgentRoute() {
                 label="Face"
                 description="Drawn from the handle, name and role, and shaped by the agent's first department."
               >
-                <EntityAvatar kind="agent" face={avatarFace} name={profileForm.name} size="xl" />
+                <EntityAvatar
+                  memberId={agent.id}
+                  kind="agent"
+                  face={avatarFace}
+                  name={profileForm.name}
+                  size="xl"
+                />
               </SettingsRow>
 
               <SettingsRow
@@ -629,7 +652,7 @@ function AgentRoute() {
                     : 'Ignores @mentions until you resume it. Nothing on disk is touched.'
                 }
               >
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <Switch
                     checked={agent.status === 'active'}
                     disabled={!canManage}
@@ -721,6 +744,14 @@ function AgentRoute() {
           {/* --- skills --- */}
           <SettingsPanel value="skills">
             <AgentSkillsTab agentId={agent.id} skills={skills} canManage={canManage} />
+          </SettingsPanel>
+
+          <SettingsPanel value="connectors">
+            <AgentConnectorsTab
+              agentId={agent.id}
+              connectors={detail.data?.connectors ?? []}
+              canManage={canManage}
+            />
           </SettingsPanel>
 
           {/* --- repositories (docs/build-plan-repositories.md) --- */}
@@ -890,7 +921,7 @@ function AgentRoute() {
                 description="Gives the agent a headless Chromium (Playwright MCP) inside its machine. Logins persist between tasks."
                 htmlFor="runtime-browser"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <Switch
                     id="runtime-browser"
                     checked={runtimeForm.browserAccess}

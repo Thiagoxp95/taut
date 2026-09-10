@@ -20,6 +20,7 @@ export interface FakeTaut {
   readonly token: string
   readonly requests: Array<Recorded>
   /** Flip to make `GET /ask/:id` answer instead of staying pending. */
+  parkAsks: boolean
   answerAsks: boolean
   /** Force the next response to this status + body. */
   failNext: { status: number; body: unknown } | undefined
@@ -55,6 +56,23 @@ const respond = (
     return f
   }
   const key = `${method} ${path}`
+  if (key === 'POST /agents/search')
+    return {
+      status: 200,
+      body: {
+        agents: [
+          {
+            id: 'agt_database',
+            handle: 'database',
+            name: 'Database',
+            role: 'DBA',
+            status: 'active',
+            skills: [{ name: 'production-sql', description: 'Review production SQL' }]
+          }
+        ],
+        hasMore: false
+      }
+    }
   if (key === 'POST /send')
     return {
       status: 200,
@@ -88,7 +106,15 @@ const respond = (
     }
   }
   if (key === 'POST /ask')
-    return { status: 200, body: { askId: 'ask_1', messageId: 'msg_10', threadId: 'msg_1' } }
+    return {
+      status: 200,
+      body: {
+        askId: 'ask_1',
+        messageId: 'msg_10',
+        threadId: 'msg_1',
+        ...(fake.parkAsks ? { parked: true } : {})
+      }
+    }
   if (method === 'GET' && path.startsWith('/ask/')) {
     const askId = path.slice('/ask/'.length)
     return fake.answerAsks
@@ -259,6 +285,7 @@ export const startFakeTaut = (): Promise<FakeTaut> =>
         url,
         token,
         requests,
+        parkAsks: false,
         answerAsks: false,
         failNext: undefined,
         layer: TautClient.Default.pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(config)),

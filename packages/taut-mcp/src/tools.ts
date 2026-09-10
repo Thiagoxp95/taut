@@ -7,7 +7,16 @@ import type { ParseResult } from 'effect'
 import { TautClient } from './client.js'
 import type { TautClientError } from './client.js'
 import {
+  AgentSearchRequest,
+  ProposeMandateRequest,
+  CanvasCreateRequest,
+  CanvasUpdateRequest,
+  CanvasOpenRequest,
+  CanvasCloseRequest,
+  CanvasListQuery,
   AskRequest,
+  AskUserQuestionRequest,
+  RenderComponentRequest,
   DoneRequest,
   HandoffRequest,
   InboxQuery,
@@ -20,11 +29,14 @@ import {
   MemoryTimelineRequest,
   CancelSignalRequest,
   CreateIssueRequest,
+  GetIssueRequest,
+  UpdateIssueRequest,
   EmitSignalRequest,
   LinearProjectsQuery,
   ListSignalsQuery,
   OpenPullRequestRequest,
   ReactRequest,
+  DeleteRequest,
   SendRequest,
   SkillInstallRequest,
   SkillListQuery,
@@ -39,12 +51,22 @@ import {
 } from './protocol.js'
 
 export const ToolNames = [
+  'taut_agent_search',
+  'mandate_propose',
   'taut_send',
+  'taut_delete',
   'taut_inbox',
   'taut_ask',
+  'ask_user_question',
+  'render_component',
   'taut_done',
   'taut_handoff',
   'taut_react',
+  'canvas_create',
+  'canvas_update',
+  'canvas_open',
+  'canvas_close',
+  'canvas_list',
   'memory_search',
   'memory_grep',
   'memory_recall_thread',
@@ -65,6 +87,8 @@ export const ToolNames = [
   'github_open_pr',
   'linear_projects',
   'linear_create_issue',
+  'linear_get_issue',
+  'linear_update_issue',
   'emit_signal',
   'list_signals',
   'cancel_signal'
@@ -107,6 +131,8 @@ const defineTool = <A, I>(def: {
   readonly name: ToolName
   readonly description: string
   readonly input: Schema.Schema<A, I>
+  /** MCP requires an object at the root; tagged unions expose their fields here. */
+  readonly parameters?: Schema.Schema.AnyNoContext
   readonly run: (
     client: TautClient,
     input: A
@@ -116,7 +142,7 @@ const defineTool = <A, I>(def: {
   return {
     name: def.name,
     description: def.description,
-    inputSchema: toInputSchema(def.input),
+    inputSchema: toInputSchema(def.parameters ?? def.input),
     run: (raw) =>
       Effect.gen(function* () {
         const client = yield* TautClient
@@ -130,13 +156,83 @@ export const ASK_MAX_TIMEOUT_SEC = 45
 const ASK_POLL_MAX_WAIT_MS = 10_000
 const ASK_POLL_PAUSE_MS = 250
 
+const askHumanOrAgent = (c: TautClient, i: typeof AskRequest.Type) =>
+  Effect.gen(function* () {
+    const timeoutSec = Math.min(ASK_MAX_TIMEOUT_SEC, i.timeoutSec ?? ASK_MAX_TIMEOUT_SEC)
+    const created = yield* c.ask({ ...i, timeoutSec })
+    if (created.parked) {
+      return {
+        ...created,
+        parked: true,
+        hint: 'Your teammate can answer after you end this turn. End now without another message; your question is already posted.'
+      }
+    }
+    const deadline = Date.now() + timeoutSec * 1000
+    while (Date.now() < deadline) {
+      const remaining = deadline - Date.now()
+      const status = yield* c.askStatus(created.askId, Math.min(remaining, ASK_POLL_MAX_WAIT_MS))
+      if (status.status === 'answered' && status.answer !== undefined) {
+        return { answered: true, askId: created.askId, answer: status.answer }
+      }
+      yield* Effect.sleep(Duration.millis(Math.min(ASK_POLL_PAUSE_MS, deadline - Date.now())))
+    }
+    return {
+      parked: true,
+      askId: created.askId,
+      messageId: created.messageId,
+      hint: 'No answer yet. End your turn now; Taut will resume you with the answer.'
+    }
+  })
+
 export const tools: ReadonlyArray<Tool> = [
+  defineTool({
+    name: 'ask_user_question',
+    description:
+      'Ask a human 1–4 questions in an inline Taut card. Supply 2–6 choices per question (usually 3–4), unique question IDs and unique option labels; multiSelect allows several choices. The human can always say more or write their own answer. Use this instead of terminal AskUserQuestion or request_user_input. Uses the same reply and park/resume behavior as taut_ask: when parked, end your turn without taut_done and wait for the answer. Never assume a default was submitted.',
+    input: AskUserQuestionRequest,
+    run: askHumanOrAgent
+  }),
+  defineTool({
+    name: 'render_component',
+    description:
+      'Render an inline component using Taut’s Shadcn theme. kind:"timer" requires title, durationSeconds (1 second to 7 days), and onComplete (instructions for your future turn). It starts immediately and schedules a durable wake in this conversation, even when the user closes the app; finish your turn normally and act when woken. Do not also emit_signal for the same timer. kind:"card" requires title and Markdown body for an informational card. For interactive choices use ask_user_question. For a custom visual use canvas_create. Returns messageId.',
+    input: RenderComponentRequest,
+    parameters: Schema.Struct({
+      kind: Schema.Literal('timer', 'card'),
+      title: RenderComponentRequest.members[0].fields.title,
+      durationSeconds: Schema.optional(RenderComponentRequest.members[0].fields.durationSeconds),
+      onComplete: Schema.optional(RenderComponentRequest.members[0].fields.onComplete),
+      body: Schema.optional(RenderComponentRequest.members[1].fields.body)
+    }),
+    run: (c, i) => c.renderComponent(i)
+  }),
+  defineTool({
+    name: 'taut_agent_search',
+    description:
+      'Find other agents in your departments by name, handle, role or active skill summaries. Omit query to list teammates. Returns public capabilities and active/paused status, never credentials, vault metadata, mandates or skill bodies. If hasMore is true, refine your query or raise limit (maximum 50). When you lack a skill or access, find an active specialist, then use taut_handoff with the goal, proposed operation and constraints, or taut_ask for a question. The specialist reviews and acts under its own mandate and permissions using its own credentials, and returns results. Ask for work to be performed, never for secrets. No shared department means no results; ask your department head for help.',
+    input: AgentSearchRequest,
+    run: (c, i) => c.agentSearch(i)
+  }),
+  defineTool({
+    name: 'mandate_propose',
+    description:
+      'Propose a replacement for your own mandate only when a human in your department explicitly requests it. Posts a permission card with the complete preview and Approve/Decline buttons. This does not change your mandate: a same-department human must approve the card. Never use for another agent’s request or edit AGENT.md directly. After proposing, tell the human to review the card; do not claim the mandate is updated.',
+    input: ProposeMandateRequest,
+    run: (client, input) => client.proposeMandate(input)
+  }),
   defineTool({
     name: 'taut_send',
     description:
-      'Post a short message addressed to "@handle" (your department head or a teammate in your department) or to "#channel" — it lands in your current task thread, or at the top of the channel you name. A teammate in your department is always reachable — the message lands in the current channel when they are in it, and otherwise in your DM with them, which is opened on first use. Name a "#channel" instead when you want the exchange to be public. Use it for status, findings and coordination — not for long content: put substance in files and reference the path. Agents in another department are out of reach — that is a hard boundary with no gate, so tell your own department head instead and let them carry it across. Returns `posted:true` with the created messageId and seq. It does not wait for a reply; use taut_ask when you need an answer. **If it returns `posted:false` your message was NOT posted**: a teammate answered while you were writing, and their messages are in `steer`. Read them, then decide again — react to what they said with taut_react and stop, or send something that adds to it. That happens at most once per run. To share a file or an image (screenshot, CSV, PDF…) pass `attachments: ["<path inside your home>"]`; the human sees it inline.',
+      'To send a private DM, set delivery:"dm" and to:"@handle"; your own DM opens automatically, including with your department head, with no approval needed. Never use #dm. Post a short message addressed to "@handle" (your department head or a teammate in your department) or to "#channel" — it lands in your current task thread, or at the top of the channel you name. A teammate in your department is always reachable — the message lands in the current channel when they are in it, and otherwise in your DM with them, which is opened on first use. Name a "#channel" instead when you want the exchange to be public. Use it for status, findings and coordination — not for long content: put substance in files and reference the path. Agents in another department are out of reach — that is a hard boundary with no gate, so tell your own department head instead and let them carry it across. Returns `posted:true` with the created messageId and seq. It does not wait for a reply; use taut_ask when you need an answer. **If it returns `posted:false` your message was NOT posted**: a teammate answered while you were writing, and their messages are in `steer`. Read them, then decide again — react to what they said with taut_react and stop, or send something that adds to it. That happens at most once per run. To share a file or an image (screenshot, CSV, PDF…) pass `attachments: ["<path inside your home>"]`; the human sees it inline.',
     input: SendRequest,
     run: (c, i) => c.send(i)
+  }),
+  defineTool({
+    name: 'taut_delete',
+    description:
+      'Delete one of your own messages by messageId, including an obsolete approval card. Use this to remove accidental duplicates or superseded drafts instead of asking the human to ignore them. Use the messageId returned by taut_send, or message.id from mandate_propose. Only your messages in channels you belong to can be deleted. A deleted pending approval card can no longer be approved; deleting a decided card does not undo its decision. Refuses messages still streaming and messages with replies, so no one else’s replies are removed. Returns { deleted: true, messageId }; an unknown or already deleted id returns 404.',
+    input: DeleteRequest,
+    run: (c, i) => c.delete(i)
   }),
   defineTool({
     name: 'taut_inbox',
@@ -147,36 +243,14 @@ export const tools: ReadonlyArray<Tool> = [
   }),
   defineTool({
     name: 'taut_ask',
-    description: `Ask a human or teammate a blocking question and wait up to timeoutSec (max ${ASK_MAX_TIMEOUT_SEC}) for the answer. Returns { answered: true, answer } when it arrives in time. Otherwise returns { parked: true, askId } — that is normal: stop working and END YOUR TURN without calling taut_done; Taut parks the task and resumes your session with the answer as the next prompt. Never poll in a loop and never guess the answer.`,
+    description: `Ask a human or teammate a question. A teammate in this thread must wait for your turn to end, so the tool parks immediately; otherwise wait up to timeoutSec (max ${ASK_MAX_TIMEOUT_SEC}) for the answer. Returns { answered: true, answer } when it arrives in time. Otherwise returns { parked: true, askId } — that is normal: stop working and END YOUR TURN without calling taut_done; Taut parks the task and resumes your session with the answer as the next prompt. Never poll in a loop and never guess the answer.`,
     input: AskRequest,
-    run: (c, i) =>
-      Effect.gen(function* () {
-        const timeoutSec = Math.min(ASK_MAX_TIMEOUT_SEC, i.timeoutSec ?? ASK_MAX_TIMEOUT_SEC)
-        const created = yield* c.ask({ ...i, timeoutSec })
-        const deadline = Date.now() + timeoutSec * 1000
-        while (Date.now() < deadline) {
-          const remaining = deadline - Date.now()
-          const status = yield* c.askStatus(
-            created.askId,
-            Math.min(remaining, ASK_POLL_MAX_WAIT_MS)
-          )
-          if (status.status === 'answered' && status.answer !== undefined) {
-            return { answered: true, askId: created.askId, answer: status.answer }
-          }
-          yield* Effect.sleep(Duration.millis(Math.min(ASK_POLL_PAUSE_MS, deadline - Date.now())))
-        }
-        return {
-          parked: true,
-          askId: created.askId,
-          messageId: created.messageId,
-          hint: 'No answer yet. End your turn now; Taut will resume you with the answer.'
-        }
-      })
+    run: askHumanOrAgent
   }),
   defineTool({
     name: 'taut_done',
     description:
-      'Finish the current task — call it exactly once, as your last action, after a final taut_inbox check. Posts the summary in the thread, marks the task done (or failed with outcome:"failed") and notifies the human who assigned it. The summary should say what changed, where, and what remains. **Pass an empty summary when your whole answer was a reaction** (taut_react): the empty reply is withdrawn rather than posted, and the thread stays clean. Like taut_send it can come back `posted:false` with a `steer` list — the task is still open, read them and decide again. To share a file or an image (screenshot, CSV, PDF…) pass `attachments: ["<path inside your home>"]`; the human sees it inline. Do not call it after a parked taut_ask.',
+      'Finish the current task — call it exactly once, as your last action, after a final taut_inbox check. Posts the summary in the thread, marks the task done (or failed with outcome:"failed") and notifies the human who assigned it. The summary should say what changed, where, and what remains. **Pass an empty summary when your contribution was already posted with taut_send in this thread or was a reaction** (taut_react): the empty reply is withdrawn rather than posted, and the thread stays clean. Like taut_send it can come back `posted:false` with a `steer` list — the task is still open, read them and decide again. To share a file or an image (screenshot, CSV, PDF…) pass `attachments: ["<path inside your home>"]`; the human sees it inline. Do not call it after a parked taut_ask.',
     input: DoneRequest,
     run: (c, i) => c.done(i)
   }),
@@ -193,6 +267,41 @@ export const tools: ReadonlyArray<Tool> = [
       'React to a message with an emoji instead of writing one. A reaction is a complete answer: when a teammate has already said what you were going to say, react to their message (\u{1F44D} you agree, \u2705 done, \u{1F440} seen, \u{1F389} nice) and finish your turn — do not repeat them in your own words, and do not ask them to confirm what they just confirmed. You may react to any message in a channel you can see, including the one that invoked you. Pass on:false to take a reaction back. Returns every emoji now on the message with its count. When this is your whole answer, follow it with taut_done and an empty summary.',
     input: ReactRequest,
     run: (c, i) => c.react(i)
+  }),
+  defineTool({
+    name: 'canvas_create',
+    description:
+      'Create a visual canvas for the human in your current conversation or thread. Send a title and a self-contained HTML document with inline CSS and JavaScript; embed assets as data URLs. The sandbox has no network or parent application access. It opens immediately unless open is false. You can create multiple canvases and control only your own. Returns { canvas } with its id and summary, without HTML; use canvas_update to revise it and canvas_close to dismiss it.',
+    input: CanvasCreateRequest,
+    run: (c, i) => c.canvasCreate(i)
+  }),
+  defineTool({
+    name: 'canvas_update',
+    description:
+      'Revise one of your canvases in the current conversation or thread using its canvasId. Send only the title and/or html you want to replace; HTML replaces the whole document and must be self-contained with inline CSS and JavaScript and data URL assets. The sandbox has no network or parent application access. Updating preserves whether the canvas is open; use canvas_open to present it again. Returns { canvas } with the updated summary and no HTML.',
+    input: CanvasUpdateRequest,
+    run: (c, i) => c.canvasUpdate(i)
+  }),
+  defineTool({
+    name: 'canvas_open',
+    description:
+      'Present one of your canvases in the current conversation or thread using its canvasId. This re-presents the preview even if it was already open, bringing it back for the human to inspect. Returns { canvas } with its current summary and no HTML.',
+    input: CanvasOpenRequest,
+    run: (c, i) => c.canvasOpen(i)
+  }),
+  defineTool({
+    name: 'canvas_close',
+    description:
+      'Dismiss one of your canvas popups in the current conversation or thread using its canvasId. The document remains available for later updates and can be shown again with canvas_open. You can close only your own canvases. Returns { canvas } with its summary and no HTML.',
+    input: CanvasCloseRequest,
+    run: (c, i) => c.canvasClose(i)
+  }),
+  defineTool({
+    name: 'canvas_list',
+    description:
+      'List your canvases in the current conversation or thread, including open and closed previews. Returns { items } with each canvas id, title, open state, revision and timestamps, without HTML. Use the id to update, open or close a canvas you previously created.',
+    input: CanvasListQuery,
+    run: (c) => c.canvasList()
   }),
   defineTool({
     name: 'memory_search',
@@ -225,7 +334,7 @@ export const tools: ReadonlyArray<Tool> = [
   defineTool({
     name: 'memory_note',
     description:
-      'Write a durable note to your own memory: a decision, a preference of a teammate, a gotcha about this codebase, a summary of a long thread. One topic per note; add tags to find it again. Notes are searchable with memory_search (kind: "note") and are the only memory you can delete. Returns the stored item with its id.',
+      'Write a durable note to your own memory: a decision, a preference of a teammate, a gotcha about this codebase, a summary of a long thread. One topic per note; add tags to find it again. Notes are searchable with memory_search (kind: "note"); use memory_forget to delete a note. Returns the stored item with its id.',
     input: MemoryNoteRequest,
     run: (c, i) => c.memoryNote(i)
   }),
@@ -239,7 +348,7 @@ export const tools: ReadonlyArray<Tool> = [
   defineTool({
     name: 'memory_forget',
     description:
-      'Delete one of your notes by id. Only notes can be forgotten — messages and task results are the shared record and stay. Returns { deleted: true } or { deleted: false } when no such note existed.',
+      'Delete one of your notes by id. Only notes can be forgotten with this tool. To retract one of your own chat messages, use taut_delete. Returns { deleted: true } or { deleted: false } when no such note existed.',
     input: MemoryForgetRequest,
     run: (c, i) => c.memoryForget(i)
   }),
@@ -335,6 +444,25 @@ export const tools: ReadonlyArray<Tool> = [
       'File a Linear ticket under one of the company\'s projects, on behalf of the person who asked you. Call linear_projects first for the `projectId`. Write the description for whoever picks the ticket up: the problem, what "done" looks like, and what you already know — not a transcript of the conversation. The ticket is assigned to the person who asked, so they get it in their Linear inbox, and it says you filed it. Returns { identifier, url, state, assignee, projectName }; quote the identifier (e.g. ENG-4636) back to them. Refused when the person who asked is not mapped to a Linear account: their admin maps them on Settings → Linear, and the refusal tells you so. Also refused for a run with no human behind it — a routine or a schedule cannot file tickets. Ask before filing, and file once: there is no way to delete a ticket from here.',
     input: CreateIssueRequest,
     run: (c, i) => c.linearCreateIssue(i)
+  }),
+  /**
+   * D18: an agent that can be told "take this ticket" and cannot move it to In
+   * Progress is a worse teammate than a human intern. Same gate as
+   * `linear_create_issue`, and the same refusal in the same words.
+   */
+  defineTool({
+    name: 'linear_get_issue',
+    description:
+      "Read one Linear ticket — what it is, where it stands, who it is on, and what it hangs under. Take the `ref` from whatever the person quoted at you: `ENG-4636` (case does not matter) or a `pis_…` id out of a Taut link. When you were woken in a ticket's thread, the ticket is already at the top of your prompt and you do not need this to know which one you are in — use it to check the current state before you change it, or to look up a different ticket somebody mentioned. Returns { identifier, title, description, state, priority, assignee, labels, projectName, milestone, dueDate, parent, subIssues, url }. Refused for a ticket in another company, and for a ref this workspace has never mirrored.",
+    input: GetIssueRequest,
+    run: (c, i) => c.linearGetIssue(i)
+  }),
+  defineTool({
+    name: 'linear_update_issue',
+    description:
+      "Change a Linear ticket: move it to another workflow state, retitle it, rewrite its description, set its priority, due date or estimate. Send only the fields you are actually changing — everything you leave out stays as it is, and `description` replaces the whole body, so carry over what still applies. `state` is the name the team uses (`In Progress`, `Done`); a name the team does not have comes back with the list of the ones it does. The change goes to Linear and Taut takes Linear's answer as the truth, so what you get back is the ticket as it now stands — quote that, not what you asked for. Move a ticket you were asked to work on into the state that says so, and say in your reply that you did. Refused when the person who asked is not mapped to a Linear account, and for a run with no human behind it — the same door `linear_create_issue` uses, with the same reason.",
+    input: UpdateIssueRequest,
+    run: (c, i) => c.linearUpdateIssue(i)
   }),
   /**
    * Signals (docs/build-plan-triggers.md Part II). The last two sentences of this description

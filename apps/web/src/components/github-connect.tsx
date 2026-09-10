@@ -2,6 +2,7 @@ import * as React from 'react'
 import type { GithubManifest } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 import { useGithubManifest } from '@/lib/api'
+import { isDesktop } from '@/lib/desktop'
 
 /**
  * GitHub's App manifest flow is a browser form POST to github.com, not an API
@@ -11,6 +12,12 @@ import { useGithubManifest } from '@/lib/api'
  * (docs/build-plan-repositories.md, "The GitHub App manifest flow").
  */
 export function submitGithubManifest(manifest: GithubManifest): void {
+  if (isDesktop) {
+    // The shell opens URLs in the OS browser, discarding a form's POST body.
+    // This one-use page submits the manifest from inside that browser instead.
+    window.open(manifest.browserUrl, '_blank', 'noopener,noreferrer')
+    return
+  }
   const form = document.createElement('form')
   form.method = 'POST'
   form.action = manifest.postUrl
@@ -23,13 +30,17 @@ export function submitGithubManifest(manifest: GithubManifest): void {
 
   form.append(field)
   document.body.append(form)
-  form.submit()
+  try {
+    form.submit()
+  } finally {
+    form.remove()
+  }
 }
 
 /**
  * The one control that starts the connection, shared by company settings and
  * the onboarding step. It asks the server for a manifest, then leaves the page
- * for github.com, so it never returns to an idle state on success.
+ * for github.com, or opens the browser handoff when running in the desktop shell.
  */
 export function GithubConnectButton({
   label = 'Connect GitHub',
@@ -57,13 +68,19 @@ export function GithubConnectButton({
         variant={variant}
         size={size}
         className={block ? 'w-full' : undefined}
-        disabled={disabled || manifest.isPending || manifest.isSuccess}
+        disabled={disabled || manifest.isPending}
         onClick={() =>
           manifest.mutate(undefined, { onSuccess: (result) => submitGithubManifest(result) })
         }
       >
-        {manifest.isPending || manifest.isSuccess ? 'Opening GitHub…' : label}
+        {manifest.isPending ? 'Opening GitHub…' : label}
       </Button>
+      {isDesktop && manifest.isSuccess ? (
+        <p className="mt-2 text-xs text-muted-foreground" role="status">
+          Continue in your browser to create the app and choose repositories. If it did not open,
+          click Connect GitHub to try again.
+        </p>
+      ) : null}
       {manifest.isError ? (
         <p className="mt-2 text-xs text-destructive">{manifest.error.message}</p>
       ) : null}

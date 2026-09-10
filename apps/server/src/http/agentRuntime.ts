@@ -1,3 +1,4 @@
+import { Message } from '@taut/contract/domain'
 /**
  * `/api/agent-runtime/*` — the routes of `AgentRuntimeRoutes` (`@taut/taut-mcp/protocol`),
  * `Authorization: Bearer <TAUT_TOKEN>`. A plain `HttpRouter` mounted next to the `TautApi`
@@ -294,6 +295,10 @@ export const AgentRuntimeLive = HttpApiBuilder.Router.use((router) =>
      * landing `pending` unless the company has said otherwise (D7, D12).
      */
     const routes = coreRoutes.pipe(
+      HttpRouter.post(
+        '/agents/search',
+        handle(R.agentSearch, (p, input) => api.agentSearch(p, input))
+      ),
       HttpRouter.get(
         '/skills',
         handle(R.skillList, (p) => api.skillList(p))
@@ -334,6 +339,19 @@ export const AgentRuntimeLive = HttpApiBuilder.Router.use((router) =>
         handle(R.linearCreateIssue, (p, input) => api.linearCreateIssue(p, input))
       ),
       /**
+       * One ticket, read and changed (docs/build-plan-issues.md D18). Same gate as
+       * the create above, in the same words: an agent may do to a ticket exactly
+       * what the human it is answering could do, and nothing more.
+       */
+      HttpRouter.get(
+        '/linear/issue',
+        handle(R.linearGetIssue, (p, input) => api.linearGetIssue(p, input))
+      ),
+      HttpRouter.post(
+        '/linear/issue/update',
+        handle(R.linearUpdateIssue, (p, input) => api.linearUpdateIssue(p, input))
+      ),
+      /**
        * Signals (docs/build-plan-triggers.md Part II). Own signals only: the emitter is the
        * token's agent and never a request field, the same rule the vault and the skills
        * routes above enforce. `emit` is the one call whose whole purpose is to let the turn
@@ -353,14 +371,50 @@ export const AgentRuntimeLive = HttpApiBuilder.Router.use((router) =>
       )
     )
 
-    yield* router.mount(AGENT_RUNTIME_PREFIX, routes)
+    const withCanvases = routes.pipe(
+      HttpRouter.post(
+        '/components/render',
+        handle(R.renderComponent, (p, i) => api.renderComponent(p, i))
+      ),
+      HttpRouter.post(
+        '/delete',
+        handle(R.delete, (p, i) => api.delete(p, i))
+      ),
+      HttpRouter.post(
+        '/mandate/propose',
+        handle({ ...R.proposeMandate, response: Schema.Struct({ message: Message }) }, (p, i) =>
+          api.proposeMandate(p, i)
+        )
+      ),
+      HttpRouter.post(
+        '/canvases/create',
+        handle(R.canvasCreate, (p, i) => api.canvasCreate(p, i))
+      ),
+      HttpRouter.post(
+        '/canvases/update',
+        handle(R.canvasUpdate, (p, i) => api.canvasChange(p, i.canvasId, 'update', i))
+      ),
+      HttpRouter.post(
+        '/canvases/open',
+        handle(R.canvasOpen, (p, i) => api.canvasChange(p, i.canvasId, 'open'))
+      ),
+      HttpRouter.post(
+        '/canvases/close',
+        handle(R.canvasClose, (p, i) => api.canvasChange(p, i.canvasId, 'close'))
+      ),
+      HttpRouter.get(
+        '/canvases',
+        handle(R.canvasList, (p) => api.canvasList(p))
+      )
+    )
+    yield* router.mount(AGENT_RUNTIME_PREFIX, withCanvases)
     /**
      * The build plan writes these two as `/agent/git-credential` and
      * `/agent/github/pull-request`, and W1b is coding against those literal
      * paths. Mounting the same handlers at both prefixes costs one line and
      * removes the only place the two waves could miss each other.
      */
-    yield* router.mount(AGENT_ALIAS_PREFIX, routes)
+    yield* router.mount(AGENT_ALIAS_PREFIX, withCanvases)
     yield* Effect.logDebug(
       `agent-runtime: mounted at ${AGENT_RUNTIME_PREFIX} (alias ${AGENT_ALIAS_PREFIX})`
     )

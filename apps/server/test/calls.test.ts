@@ -433,6 +433,47 @@ describe('calls', () => {
         })
     )
 
+    it.effect('agent DMs cannot start huddles, while channels containing agents still can', () =>
+      Effect.gen(function* () {
+        const owner = need(state.owner, 'owner')
+        const agent = yield* owner.api.agents.create({
+          payload: {
+            handle: 'huddle-agent',
+            name: 'Huddle Agent',
+            avatar,
+            role: 'Researcher',
+            mandate: 'Answer questions.',
+            runtimeKind: 'claude-code',
+            permissionMode: 'plan'
+          }
+        })
+        const dm = yield* owner.api.channels.dm({
+          payload: { memberKind: 'agent', memberId: agent.id }
+        })
+        const before = yield* callEventCounts
+        const result = yield* Effect.either(owner.api.calls.join({ path: { channelId: dm.id } }))
+        expect(result._tag).toBe('Left')
+        if (result._tag === 'Left') expect(result.left._tag).toBe('Validation')
+        expect(yield* callEventCounts).toEqual(before)
+        expect((yield* owner.api.calls.active()).some((call) => call.channelId === dm.id)).toBe(
+          false
+        )
+        expect((yield* owner.api.messages.list({ urlParams: { channelId: dm.id } })).items).toEqual(
+          []
+        )
+
+        const atlas = need(state.atlas, 'atlas')
+        yield* owner.api.channels.addMember({
+          path: { channelId: atlas.id },
+          payload: { memberKind: 'agent', memberId: agent.id }
+        })
+        const credentials = yield* owner.api.calls.join({ path: { channelId: atlas.id } })
+        expect(credentials.token).not.toBe('')
+        expect(credentials.call.channelId).toBe(atlas.id)
+        yield* owner.api.calls.leave({ path: { callId: credentials.call.id } })
+      })
+    )
+
     it.effect('a huddle whose message cannot be posted still joins, and still ends (D8)', () =>
       Effect.gen(function* () {
         const owner = need(state.owner, 'owner')

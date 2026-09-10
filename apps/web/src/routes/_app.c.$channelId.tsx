@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { HashIcon } from 'lucide-react'
+import { HashIcon } from '@taut/ui/components/icons'
 import { ChannelView } from '@/components/channel-view'
 import { useChannel } from '@/hooks/use-directory'
 import { parseMessageId } from '@/lib/ids'

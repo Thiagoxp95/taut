@@ -12,7 +12,7 @@
  * `--browser chromium` is the Playwright-managed "Chrome for Testing" build that
  * `playwright install chromium` downloads (`--help` lists only the branded channels
  * `chrome|firefox|webkit|msedge`, but `chromium` is accepted and is what the package's
- * own Dockerfile uses). `--no-sandbox` only inside Docker: the container is the sandbox
+ * own Dockerfile uses). `--no-sandbox` only inside containers: the container is the sandbox
  * (cap-drop ALL, no-new-privileges, read-only rootfs) and Chromium's own sandbox needs
  * caps it lacks. Playwright always adds `--disable-dev-shm-usage`, so `/dev/shm` size is
  * not a concern.
@@ -39,6 +39,8 @@ import { dirname, join, posix } from 'node:path'
 
 import type { BinaryMissing, Machine, MachineUnavailable } from './machine/types.js'
 import { ExecFailed } from './machine/types.js'
+
+export { browserMcpBridgeSource } from './browser-mcp-bridge.js'
 
 export const BROWSER_MCP_SERVER_KEY = 'browser'
 /** Claude Code `--allowedTools` pattern for every Playwright MCP tool. */
@@ -78,7 +80,9 @@ export const browserCdpEndpoint = (port: number = BROWSER_CDP_PORT): string =>
 /** Sub-paths under the agent home (machine-visible). */
 export const BROWSER_PATHS = {
   profile: '.taut/browser/profile',
-  output: '.taut/browser/out'
+  output: '.taut/browser/out',
+  bridge: '.taut/browser/mcp-bridge.cjs',
+  activeTarget: '.taut/browser/active-target'
 } as const
 
 export interface BrowserMcpSpec {
@@ -88,6 +92,8 @@ export interface BrowserMcpSpec {
 }
 
 export interface BrowserMcpSpecOptions {
+  /** Report the tool-selected CDP target to the live preview. Launcher must be installed first. */
+  readonly follow?: boolean
   readonly provider: 'local' | 'docker'
   /** Agent home **as seen inside the machine** (`/home/agent` on docker; the host path on local). */
   readonly homeDir: string
@@ -148,6 +154,10 @@ const commonArgs = (homeDir: string): ReadonlyArray<string> => [
   browserOutputDir(homeDir)
 ]
 
+/** Opt-in for the trusted shared-runtime image; ordinary local development keeps Chromium's sandbox. */
+const localSandboxArgs = (): ReadonlyArray<string> =>
+  process.env['TAUT_BROWSER_NO_SANDBOX'] === 'true' ? ['--no-sandbox'] : []
+
 /**
  * How to start the `browser` MCP server inside the agent's machine.
  *
@@ -156,6 +166,21 @@ const commonArgs = (homeDir: string): ReadonlyArray<string> => [
  *   with `PLAYWRIGHT_BROWSERS_PATH` pointing at the host cache (see the file header).
  */
 export const browserMcpSpec = (o: BrowserMcpSpecOptions): BrowserMcpSpec => {
+  if (o.follow && o.cdpEndpoint) {
+    return {
+      command: 'node',
+      args: [
+        posix.join(o.homeDir, BROWSER_PATHS.bridge),
+        o.provider === 'local' ? browserMcpCliPath() : BROWSER_MCP_DOCKER_COMMAND,
+        o.cdpEndpoint,
+        browserOutputDir(o.homeDir),
+        posix.join(o.homeDir, BROWSER_PATHS.activeTarget)
+      ],
+      ...(o.provider === 'local'
+        ? { env: { PLAYWRIGHT_BROWSERS_PATH: hostPlaywrightBrowsersPath() } }
+        : {})
+    }
+  }
   switch (o.provider) {
     case 'docker':
       if (o.cdpEndpoint !== undefined) {
@@ -194,7 +219,7 @@ export const browserMcpSpec = (o: BrowserMcpSpecOptions): BrowserMcpSpec => {
       }
       return {
         command: 'node',
-        args: [browserMcpCliPath(), ...commonArgs(o.homeDir)],
+        args: [browserMcpCliPath(), ...commonArgs(o.homeDir), ...localSandboxArgs()],
         env: { PLAYWRIGHT_BROWSERS_PATH: hostPlaywrightBrowsersPath() }
       }
   }
@@ -461,6 +486,7 @@ export const ensureLocalBrowserDaemon = (
         binary,
         [
           '--headless=new',
+          ...localSandboxArgs(),
           '--disable-gpu',
           '--disable-dev-shm-usage',
           '--no-first-run',

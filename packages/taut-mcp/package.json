@@ -23,7 +23,8 @@
     "@effect/platform": "0.97.1",
     "@modelcontextprotocol/sdk": "1.30.0",
     "effect": "3.22.1",
-    "zod": "4.5.4"
+    "zod": "4.5.4",
+    "@taut/contract": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "0.30.0",

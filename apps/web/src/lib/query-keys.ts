@@ -1,6 +1,8 @@
 /** One place for every TanStack Query key, so realtime updates can find them. */
 export const qk = {
   me: ['me'] as const,
+  allAuthorizations: ['authorization'] as const,
+  authorization: (messageId: string) => ['authorization', messageId] as const,
   companies: ['companies'] as const,
   members: ['members'] as const,
   invites: ['invites'] as const,
@@ -9,9 +11,13 @@ export const qk = {
   departments: ['departments'] as const,
   department: (departmentId: string) => ['departments', departmentId] as const,
   channels: ['channels'] as const,
+  dmInbox: ['dm-inbox'] as const,
   channel: (channelId: string) => ['channels', 'one', channelId] as const,
   channelMembers: (channelId: string) => ['channel-members', channelId] as const,
   channelContext: (channelId: string) => ['channel-context', channelId] as const,
+  canvases: (channelId: string) => ['canvases', channelId] as const,
+  attachmentText: (id: string) => ['attachments', 'text', id] as const,
+  canvas: (channelId: string, canvasId: string) => ['canvas', channelId, canvasId] as const,
   messages: (channelId: string) => ['messages', channelId] as const,
   allMessages: ['messages'] as const,
   thread: (threadId: string) => ['thread', threadId] as const,
@@ -55,6 +61,23 @@ export const qk = {
   project: (projectId: string) => ['projects', 'one', projectId] as const,
   /** One project's issues, as the Issues tab reads them (D19). */
   projectIssues: (projectId: string) => ['projects', 'one', projectId, 'issues'] as const,
+  /**
+   * One ticket, its project and its sub-issues (docs/build-plan-issues.md D15).
+   *
+   * Keyed by whatever the URL said, because `/issues/$issueId` resolves either a
+   * `pis_…` id or a Linear identifier: `ENG-4636` and its `pis_…` are two entries
+   * holding the same ticket. De-duplicating them would mean knowing the id before
+   * the read that returns it.
+   */
+  issue: (issueId: string) => ['projects', 'issue', issueId] as const,
+  /** Linear's own history and the comments Taut refuses to author (D13). */
+  issueActivity: (issueId: string) => ['projects', 'issue', issueId, 'activity'] as const,
+  /**
+   * The pick-lists the issue editors need, read live from Linear and cached for
+   * the session (D14). Under the project because they are the *project's* team's
+   * states, labels and members — a second project's pickers are a second entry.
+   */
+  issueOptions: (projectId: string) => ['projects', 'one', projectId, 'options'] as const,
   tasks: ['tasks'] as const,
   /** `scope` is the serialised filter, so `/tasks` and an agent's tab cache apart. */
   taskList: (scope: string) => ['tasks', 'list', scope] as const,

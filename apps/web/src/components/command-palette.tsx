@@ -7,7 +7,7 @@ import {
   SparklesIcon,
   StickyNoteIcon,
   UserIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { AgentNoteHit, MemberId, MemberKind, MessageHit } from '@taut/contract'
 import { SNIPPET_CLOSE, SNIPPET_OPEN } from '@taut/contract'
 import {
@@ -358,6 +358,8 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
                       <UserIcon />
                     ) : (
                       <EntityAvatar
+                        onProfileNavigate={() => setOpen(false)}
+                        memberId={view.partner.id}
                         avatar={view.partner.avatar}
                         kind={view.partner.kind}
                         face={view.partner.face}
@@ -382,7 +384,13 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
                   value={`${user.name} ${user.handle} ${user.email}`}
                   onSelect={() => void startDm('user', user.id)}
                 >
-                  <EntityAvatar avatar={user.avatar} name={user.name} size="sm" />
+                  <EntityAvatar
+                    onProfileNavigate={() => setOpen(false)}
+                    memberId={user.id}
+                    avatar={user.avatar}
+                    name={user.name}
+                    size="sm"
+                  />
                   <span>{user.name}</span>
                   <span className="ml-auto text-xs text-muted-foreground">@{user.handle}</span>
                 </CommandItem>
@@ -397,7 +405,14 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
                 value={`${agent.name} ${agent.handle}`}
                 onSelect={() => void startDm('agent', agent.id)}
               >
-                <EntityAvatar kind="agent" face={agent.face} name={agent.name} size="sm" />
+                <EntityAvatar
+                  onProfileNavigate={() => setOpen(false)}
+                  memberId={agent.id}
+                  kind="agent"
+                  face={agent.face}
+                  name={agent.name}
+                  size="sm"
+                />
                 <span>{agent.name}</span>
                 <span className="ml-auto text-xs text-muted-foreground">@{agent.handle}</span>
               </CommandItem>

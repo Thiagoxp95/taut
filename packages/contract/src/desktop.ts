@@ -13,6 +13,14 @@
 /** Where the OS notification (or a `taut://` deep link) wants the app to go. */
 export type DesktopNavigateHandler = (path: string) => void
 
+export interface ClaudeDesktopLogin {
+  readonly kind: 'claude.login'
+  readonly secret: string
+}
+
+/** Fixed loopback port for a browser's one-use handoff to Taut desktop. */
+export const CLAUDE_LOGIN_PORT = 45173
+
 export interface DesktopNotification {
   readonly title: string
   readonly body: string
@@ -25,6 +33,8 @@ export interface TautBridge {
   readonly platform: string
   /** The desktop app's own version (`apps/desktop/package.json`). */
   readonly version: string
+  readonly connectClaude: () => Promise<ClaudeDesktopLogin>
+  readonly cancelClaudeConnect: () => void
   /** Dock / taskbar badge. `0` clears it. */
   readonly setBadge: (count: number) => void
   /** Ask the shell for an OS notification (the shell raises its own too). */

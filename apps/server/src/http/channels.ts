@@ -1,12 +1,19 @@
 import { HttpApiBuilder } from '@effect/platform'
 import { CurrentUser } from '@taut/contract/api'
 import { Effect } from 'effect'
+import { Canvases } from '../services/canvases.js'
 import { Channels } from '../services/channels.js'
 import { ThreadContexts } from '../services/threadContext.js'
 import { ServerApi } from './serverApi.js'
 
 export const ChannelsLive = HttpApiBuilder.group(ServerApi, 'channels', (handlers) =>
   handlers
+    .handle('inbox', () =>
+      Effect.gen(function* () {
+        const channels = yield* Channels
+        return { items: yield* channels.inbox(yield* CurrentUser) }
+      })
+    )
     .handle('list', ({ urlParams }) =>
       Effect.gen(function* () {
         const channels = yield* Channels
@@ -72,6 +79,20 @@ export const ChannelsLive = HttpApiBuilder.group(ServerApi, 'channels', (handler
         // how full its agents' windows are, and `get` is what raises NotFound/Forbidden.
         yield* channels.get(yield* CurrentUser, path.channelId)
         return yield* contexts.list(path.channelId)
+      })
+    )
+    .handle('canvases', ({ path }) =>
+      Effect.gen(function* () {
+        const channels = yield* Channels
+        const channel = yield* channels.get(yield* CurrentUser, path.channelId)
+        return yield* (yield* Canvases).list(channel.companyId, channel.id)
+      })
+    )
+    .handle('canvas', ({ path }) =>
+      Effect.gen(function* () {
+        const channels = yield* Channels
+        const channel = yield* channels.get(yield* CurrentUser, path.channelId)
+        return yield* (yield* Canvases).get(channel.companyId, channel.id, path.canvasId)
       })
     )
     .handle('markRead', ({ path, payload }) =>

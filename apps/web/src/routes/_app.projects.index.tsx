@@ -7,7 +7,7 @@ import {
   RefreshCwIcon,
   SquareKanbanIcon,
   TriangleAlertIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { Project } from '@taut/contract'
 import { Badge } from '@taut/ui/components/badge'
 import { Button } from '@taut/ui/components/button'
@@ -135,7 +135,7 @@ function ProjectsRoute() {
         actions={
           connected ? (
             <>
-              <div className="hidden items-center rounded-md border p-0.5 sm:flex">
+              <div className="flex items-center rounded-md border p-0.5">
                 <Button
                   variant={view === 'board' ? 'secondary' : 'ghost'}
                   size="sm"
@@ -162,7 +162,7 @@ function ProjectsRoute() {
                 onChange={(event) => setFilter(event.target.value)}
                 placeholder="Filter projects"
                 aria-label="Filter projects"
-                className="hidden h-8 w-48 text-xs sm:block"
+                className="h-8 w-40 text-xs sm:w-48"
               />
               <Button
                 variant="outline"

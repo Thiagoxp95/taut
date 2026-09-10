@@ -15,9 +15,11 @@ export const MachineProviderFromConfig: Layer.Layer<MachineProviderTag, never, A
         yield* Effect.logInfo(
           `machines: docker provider${config.agentImage === undefined ? '' : ` (image ${config.agentImage})`}`
         )
-        return DockerProviderLive(
-          config.agentImage === undefined ? {} : { image: config.agentImage }
-        )
+        return DockerProviderLive({
+          ...(config.agentImage === undefined ? {} : { image: config.agentImage }),
+          ...(config.instanceId === undefined ? {} : { namespace: config.instanceId }),
+          ...(config.dockerNetwork === undefined ? {} : { apiNetwork: config.dockerNetwork })
+        })
       }
       yield* Effect.logInfo('machines: local provider (runtimes spawn on this host; dev only)')
       return LocalProviderLive()

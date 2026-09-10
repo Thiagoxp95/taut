@@ -119,11 +119,9 @@ export const normalizeCredentialSecret = (
       }
       /**
        * The record also holds `mcpOAuth`, tokens for whatever MCP servers that
-       * machine signed into. A paste carrying only those is the tell that
-       * Claude Code is running there without a saved OAuth login — an
-       * enterprise gateway, an API key, or a desktop-app session. `claude auth
-       * status` says "signed in" in all three, which is why the message names
-       * the record rather than the sign-in.
+       * machine signed into. Those records do not establish that a usable
+       * Claude login was exported, even when `claude auth status` succeeds.
+       * Check the actual tokens without inferring the active sign-in method.
        */
       const nested = isRecord(login['claudeAiOauth']) ? login['claudeAiOauth'] : undefined
       const oauth = nested ?? login
@@ -134,7 +132,7 @@ export const normalizeCredentialSecret = (
       }
       if (str(oauth['accessToken']) === '') {
         return Either.left(
-          'This login is empty. Claude Code is signed in there some other way (a gateway, an API key, or the desktop app), so there is no token to copy. Run `claude auth login` on that machine, or use `claude setup-token` with the "Claude setup token" kind above.'
+          'This saved login is empty: it has no Claude access token. Run `claude auth login` on that machine, then copy again. To connect using `claude setup-token`, choose Subscription in the provider dialog (or Claude setup token in the vault).'
         )
       }
       if (str(oauth['refreshToken']) === '') {

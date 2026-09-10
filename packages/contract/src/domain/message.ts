@@ -1,6 +1,8 @@
+import { MessageComponent } from './component.js'
 import { Schema } from 'effect'
 
 import { ChannelId, CompanyId, EventSeq, MemberId, MessageId } from '../ids.js'
+import { AuthorizationRequest } from './authorization.js'
 import { Attachment } from './attachment.js'
 import { AuthorKind, MemberKind, MessageStatus } from './enums.js'
 import { RunOverride } from './run.js'
@@ -51,6 +53,9 @@ export class Message extends Schema.Class<Message>('Message')({
   authorKind: AuthorKind,
   authorId: MemberId,
   body: Schema.String,
+  /** Server-created permission card; ordinary message writes cannot set this. */
+  authorization: Schema.optional(AuthorizationRequest),
+  component: Schema.optional(MessageComponent),
   /** `streaming` while an agent reply is still growing (docs/agent-model.md §6). */
   status: MessageStatus,
   /** `seq` of the `message.created` event — what `channels.markRead` takes. */

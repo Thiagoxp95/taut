@@ -37,6 +37,7 @@ export interface RecordContext {
   readonly compactsAutomatically: boolean
   readonly autoCompactThreshold?: number | undefined
   readonly compactedAt?: string | undefined
+  readonly compacting?: boolean | undefined
 }
 
 const Row = Schema.Struct({
@@ -72,6 +73,14 @@ export class ThreadContexts extends Effect.Service<ThreadContexts>()('ThreadCont
   effect: Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     const publisher = yield* EventPublisher
+    // Transient: a restarted server must never resurrect an interrupted compaction.
+    const compacting = new Set<string>()
+    const key = (agentId: AgentId, threadId: MessageId) => `${agentId}:${threadId}`
+    const current = (row: typeof Row.Type) =>
+      new ThreadContext({
+        ...toDomain(row),
+        compacting: compacting.has(key(row.agent_id, row.thread_id))
+      })
 
     const one = findOne({
       Request: Schema.Struct({ agentId: AgentIdSchema, threadId: MessageIdSchema }),
@@ -137,11 +146,11 @@ export class ThreadContexts extends Effect.Service<ThreadContexts>()('ThreadCont
 
     return {
       get: (agentId: AgentId, threadId: MessageId) =>
-        one({ agentId, threadId }).pipe(Effect.map(Option.map(toDomain))),
+        one({ agentId, threadId }).pipe(Effect.map(Option.map(current))),
 
       /** Every open window in a channel — what the client seeds its rings from on boot. */
       list: (channelId: ChannelId) =>
-        byChannel({ channelId }).pipe(Effect.map((rows) => rows.map(toDomain))),
+        byChannel({ channelId }).pipe(Effect.map((rows) => rows.map(current))),
 
       /** Write the sample and tell everyone watching the channel. */
       record: (input: RecordContext): Effect.Effect<ThreadContext> =>
@@ -159,6 +168,7 @@ export class ThreadContexts extends Effect.Service<ThreadContexts>()('ThreadCont
               ? {}
               : { autoCompactThreshold: input.autoCompactThreshold }),
             ...(input.compactedAt === undefined ? {} : { compactedAt: input.compactedAt }),
+            compacting: input.compacting ?? false,
             updatedAt: nowIso()
           })
           yield* publisher.transact(input.companyId, (emit) =>
@@ -180,6 +190,9 @@ export class ThreadContexts extends Effect.Service<ThreadContexts>()('ThreadCont
               Effect.asVoid
             )
           )
+          const id = key(input.agentId, input.threadId)
+          if (context.compacting) compacting.add(id)
+          else compacting.delete(id)
           return context
         }),
 
@@ -188,7 +201,10 @@ export class ThreadContexts extends Effect.Service<ThreadContexts>()('ThreadCont
        * resume-failure retry: that run starts cold, and a ring left at 80% would be a lie
        * told at exactly the moment the user is least able to check it.
        */
-      clear: (agentId: AgentId, threadId: MessageId) => remove({ agentId, threadId })
+      clear: (agentId: AgentId, threadId: MessageId) =>
+        remove({ agentId, threadId }).pipe(
+          Effect.tap(() => Effect.sync(() => compacting.delete(key(agentId, threadId))))
+        )
     } as const
   }),
   dependencies: [EventPublisher.Default]

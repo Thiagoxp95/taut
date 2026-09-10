@@ -9,7 +9,8 @@ const bundleWorkspace = { exclude: ['@taut/contract'] }
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin(bundleWorkspace)]
+    plugins: [externalizeDepsPlugin(bundleWorkspace)],
+    build: { rollupOptions: { input: resolve('src/main/index.ts') } }
   },
   preload: {
     // sandbox: true means the preload cannot require() node_modules; bundle its deps.

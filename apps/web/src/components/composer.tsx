@@ -16,7 +16,7 @@ import {
   StrikethroughIcon,
   TextQuoteIcon,
   XIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { Attachment, AttachmentId, Channel, ChannelId, MessageId } from '@taut/contract'
 import { cn } from '@taut/ui/lib/utils'
 import { Button } from '@taut/ui/components/button'
@@ -24,7 +24,7 @@ import { Popover, PopoverAnchor, PopoverContent } from '@taut/ui/components/popo
 import { toast } from '@taut/ui/components/sonner'
 import { AttachmentIcon } from '@/components/attachment-list'
 import { EntityAvatar } from '@/components/entity-avatar'
-import { RunSettings } from '@/components/run-settings'
+import { ComposerTools } from '@/components/composer-tools'
 import { TypingIndicator } from '@/components/typing-indicator'
 import {
   useChannel,
@@ -75,36 +75,22 @@ function pastedFile(file: File): File {
   return new File([file], `pasted-${Date.now()}.${extension}`, { type: file.type })
 }
 
-/**
- * Width the rail has to reach before a button joins it. These are container
- * queries on the composer, not viewport ones: the reply composer sits in a
- * 24rem thread panel while the window is wide, so a viewport breakpoint kept
- * every button on and pushed the tail of the rail — and Send — outside the
- * border. Each step is measured against the widest set it has to hold: the
- * full rail plus Send is ~509px, so it waits for `@xl` (36rem).
- */
-const FROM_SM = 'hidden @sm/composer:inline-flex'
-const FROM_MD = 'hidden @md/composer:inline-flex'
-const FROM_XL = 'hidden @xl/composer:inline-flex'
-
 /** The formatting rail, in Slack's order. `hint` shows in the tooltip. */
 const FORMATS: ReadonlyArray<{
   readonly format: MarkdownFormat
   readonly label: string
   readonly hint?: string
   readonly Icon: React.ComponentType
-  /** Width the button appears at; always shown when absent. */
-  readonly from?: string
 }> = [
   { format: 'bold', label: 'Bold', hint: '⌘B', Icon: BoldIcon },
   { format: 'italic', label: 'Italic', hint: '⌘I', Icon: ItalicIcon },
-  { format: 'strike', label: 'Strikethrough', hint: '⌘⇧X', Icon: StrikethroughIcon, from: FROM_SM },
+  { format: 'strike', label: 'Strikethrough', hint: '⌘⇧X', Icon: StrikethroughIcon },
   { format: 'link', label: 'Link', hint: '⌘K', Icon: LinkIcon },
-  { format: 'bullet', label: 'Bulleted list', Icon: ListIcon, from: FROM_SM },
-  { format: 'ordered', label: 'Numbered list', Icon: ListOrderedIcon, from: FROM_MD },
-  { format: 'quote', label: 'Blockquote', Icon: TextQuoteIcon, from: FROM_MD },
+  { format: 'bullet', label: 'Bulleted list', Icon: ListIcon },
+  { format: 'ordered', label: 'Numbered list', Icon: ListOrderedIcon },
+  { format: 'quote', label: 'Blockquote', Icon: TextQuoteIcon },
   { format: 'code', label: 'Code', hint: '⌘⇧C', Icon: CodeIcon },
-  { format: 'codeBlock', label: 'Code block', Icon: SquareCodeIcon, from: FROM_XL }
+  { format: 'codeBlock', label: 'Code block', Icon: SquareCodeIcon }
 ]
 
 type Trigger = '@' | '#'
@@ -168,6 +154,7 @@ function MemberRow({ candidate }: { candidate: Mentionable }) {
   return (
     <>
       <EntityAvatar
+        memberId={candidate.id}
         avatar={candidate.avatar}
         kind={candidate.kind}
         face={candidate.face}
@@ -285,7 +272,7 @@ function PendingTile({
  * or leading that lives on one has to live on the other or the chips slide off
  * the words.
  */
-const TEXT = 'px-3 pt-2.5 pb-1.5 text-sm leading-relaxed'
+const TEXT = 'px-4 pt-2.5 pb-2 text-[15px] leading-[1.46667]'
 
 const Backdrop = React.forwardRef<HTMLDivElement, { value: string; known: (h: string) => boolean }>(
   function Backdrop({ value, known }, ref) {
@@ -327,6 +314,19 @@ export interface ComposerProps {
   threadId?: MessageId
   placeholder: string
   autoFocus?: boolean
+  /**
+   * Takes over the send, for the one conversation that has no channel to send to
+   * yet: an issue's thread before anybody has opened it
+   * (docs/build-plan-issues.md D8). The body posts through `openIssueThread`,
+   * which creates the hidden channel, the root message and the thread in one
+   * call — so the box must be live *before* `channelId` exists, which is the
+   * whole reason this prop is here rather than the page rendering its own.
+   *
+   * Attachments still need a channel and stay off until there is one: an upload
+   * is addressed to a channel (docs/build-plan-attachments.md D2), and there is
+   * no honest one to give it.
+   */
+  onSend?: (body: string) => void
 }
 
 /**
@@ -346,7 +346,13 @@ export function Composer(props: ComposerProps) {
   )
 }
 
-function LiveComposer({ channelId, threadId, placeholder, autoFocus = false }: ComposerProps) {
+function LiveComposer({
+  channelId,
+  threadId,
+  placeholder,
+  autoFocus = false,
+  onSend
+}: ComposerProps) {
   const { here, elsewhere } = useMentionGroups(channelId)
   const lookupHandle = useLookupHandle()
   const { all: channels } = useChannelGroups()
@@ -439,9 +445,13 @@ function LiveComposer({ channelId, threadId, placeholder, autoFocus = false }: C
     item.attachment === undefined ? [] : [item.attachment.id]
   )
   const uploading = pending.some((item) => item.status === 'uploading')
+  /*
+   * Somewhere to send to: a channel, or a caller that has taken the send over
+   * because there is not one yet (docs/build-plan-issues.md D8).
+   */
+  const ready = channelId !== undefined || onSend !== undefined
   // Text or at least one uploaded file, and nothing still in flight (D2).
-  const canSend =
-    channelId !== undefined && !uploading && (value.trim() !== '' || attachmentIds.length > 0)
+  const canSend = ready && !uploading && (value.trim() !== '' || attachmentIds.length > 0)
 
   const isKnownHandle = React.useCallback(
     (handle: string) => lookupHandle(handle) !== undefined,
@@ -452,7 +462,7 @@ function LiveComposer({ channelId, threadId, placeholder, autoFocus = false }: C
    * The agent this draft will wake (docs/build-plan-run-overrides.md D3).
    *
    * A DM with an agent always wakes it. Anywhere else it takes an `@handle` in
-   * the draft, so the run-settings button appears the moment a mention resolves
+   * the draft, so the run controls appear the moment a mention resolves
    * to an agent and goes away again when the mention is deleted. The first
    * mentioned agent wins: a message naming two of them starts two runs, and one
    * popup cannot honestly speak for both.
@@ -568,18 +578,24 @@ function LiveComposer({ channelId, threadId, placeholder, autoFocus = false }: C
   }
 
   const send = (): void => {
-    if (!canSend || channelId === undefined) return
-    sendMessage.mutate({
-      channelId,
-      threadId,
-      body: value.trim(),
-      attachmentIds: attachmentIds.length === 0 ? undefined : attachmentIds,
-      // Only sent when an agent is actually going to read it: an override on a
-      // message to a human is noise stored forever (D3).
-      ...(targetAgent === undefined || runOverride.override === undefined
-        ? {}
-        : { runOverride: runOverride.override })
-    })
+    if (!canSend) return
+    if (onSend !== undefined) {
+      onSend(value.trim())
+    } else if (channelId !== undefined) {
+      sendMessage.mutate({
+        channelId,
+        threadId,
+        body: value.trim(),
+        attachmentIds: attachmentIds.length === 0 ? undefined : attachmentIds,
+        // Only sent when an agent is actually going to read it: an override on a
+        // message to a human is noise stored forever (D3).
+        ...(targetAgent === undefined || runOverride.override === undefined
+          ? {}
+          : { runOverride: runOverride.override })
+      })
+    } else {
+      return
+    }
     setValue('')
     setActive(null)
     clearPending()
@@ -669,7 +685,7 @@ function LiveComposer({ channelId, threadId, placeholder, autoFocus = false }: C
                 autoFocus={autoFocus}
                 value={value}
                 placeholder={placeholder}
-                disabled={channelId === undefined}
+                disabled={!ready}
                 onChange={(event) => {
                   setValue(event.target.value)
                   syncTrigger(event.target.value, event.target.selectionStart)
@@ -697,7 +713,7 @@ function LiveComposer({ channelId, threadId, placeholder, autoFocus = false }: C
             </div>
 
             {pending.length === 0 ? null : (
-              <ul aria-label="Attachments" className="flex flex-wrap gap-2 px-3 pt-1 pb-2">
+              <ul aria-label="Attachments" className="flex flex-wrap gap-2 px-4 pt-1 pb-2">
                 {pending.map((item) => (
                   <PendingTile
                     key={item.key}
@@ -723,40 +739,39 @@ function LiveComposer({ channelId, threadId, placeholder, autoFocus = false }: C
               }}
             />
 
-            <div className="flex items-center gap-1 pr-2 pb-1.5 pl-1">
-              {/*
-               * The rail takes the leftover width and scrolls inside it, so a
-               * composer too narrow even for the reduced button set clips
-               * nothing and never pushes Send past the border. `-my-1 py-1`
-               * is headroom for the buttons' focus ring, which the scroll
-               * container would otherwise cut.
-               */}
-              <div className="taut-rail -my-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto py-1">
-                {FORMATS.map(({ format: kind, label, hint, Icon, from }) => (
+            <div
+              className="taut-composer-footer flex items-center gap-1 px-2 pt-0 pb-3"
+              data-agent={targetAgent !== undefined}
+            >
+              <ComposerTools
+                agent={targetAgent}
+                state={runOverride}
+                disabled={channelId === undefined}
+              >
+                {FORMATS.map(({ format: kind, label, hint, Icon }) => (
                   <Button
                     key={kind}
                     variant="ghost"
                     size="icon-sm"
                     aria-label={label}
                     title={hint === undefined ? label : `${label} (${hint})`}
-                    disabled={channelId === undefined}
+                    disabled={!ready}
                     // Keep the caret where it is: a blur would lose the selection.
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => format(kind)}
-                    className={from}
                   >
                     <Icon />
                   </Button>
                 ))}
+              </ComposerTools>
 
-                <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border" />
-
+              <div className="flex shrink-0 items-center gap-0.5">
                 <Button
                   variant="ghost"
                   size="icon-sm"
                   aria-label="Mention someone"
                   title="Mention someone"
-                  disabled={channelId === undefined}
+                  disabled={!ready}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => openPicker('@')}
                 >
@@ -767,10 +782,10 @@ function LiveComposer({ channelId, threadId, placeholder, autoFocus = false }: C
                   size="icon-sm"
                   aria-label="Link a channel"
                   title="Link a channel"
-                  disabled={channelId === undefined}
+                  disabled={!ready}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => openPicker('#')}
-                  className={FROM_XL}
+                  className="hidden @xl/composer:inline-flex"
                 >
                   <HashIcon />
                 </Button>
@@ -787,21 +802,18 @@ function LiveComposer({ channelId, threadId, placeholder, autoFocus = false }: C
                 </Button>
               </div>
 
-              {targetAgent === undefined ? null : (
-                <RunSettings
-                  agent={targetAgent}
-                  state={runOverride}
-                  disabled={channelId === undefined}
-                />
-              )}
-
-              <span className="hidden shrink-0 text-[11px] text-nowrap text-muted-foreground @3xl/composer:block">
+              <span className="hidden shrink-0 text-[11px] text-nowrap text-muted-foreground @5xl/composer:block">
                 <kbd className="rounded border px-1 py-px font-sans">Enter</kbd> to send ·{' '}
                 <kbd className="rounded border px-1 py-px font-sans">Shift+Enter</kbd> for a new
                 line
               </span>
 
-              <Button size="sm" disabled={!canSend} onClick={send} className="ml-1 shrink-0">
+              <Button
+                size="sm"
+                disabled={!canSend}
+                onClick={send}
+                className="ml-1 shrink-0 rounded-sm"
+              >
                 {uploading ? <Loader2Icon className="animate-spin" /> : <SendHorizonalIcon />}
                 Send
               </Button>

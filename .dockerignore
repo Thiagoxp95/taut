@@ -29,3 +29,32 @@ apps/desktop
 Dockerfile
 .dockerignore
 docker-compose.yml
+
+# Private developer state and indexes are never build inputs.
+.codegraph
+.cursor
+.codex
+**/data
+**/.env
+**/.env.*
+**/master.key
+**/*.db
+**/*.db-wal
+**/*.db-shm
+self-hosted
+# Installer secrets must stay out even when its directory is inside the source checkout.
+**/secrets.env
+**/turn.env
+**/livekit.yaml
+**/installation.json
+**/compose.json
+**/backup-*.tar.gz
+# Infrastructure state and signing credentials are never image build inputs.
+**/.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/*.tfvars
+**/*.tfvars.json
+**/*.p12
+**/*.p8

@@ -11,14 +11,14 @@ import { Authentication } from './middleware.js'
  * What the browser needs to create the company's GitHub App: it renders a real
  * `<form method="POST" action={postUrl}>` with one hidden `manifest` field and
  * submits it, because GitHub's manifest flow is a form POST, not a redirect.
- * `state` is a signed, single-use, ten-minute token — it is already inside
- * `postUrl` and is returned only so the client can show it in a support
- * message (docs/build-plan-repositories.md, "The GitHub App manifest flow").
+ * Desktop opens `browserUrl` externally so the browser can perform the POST.
+ * `state` is the signed, single-use callback token already inside `postUrl`.
  */
 export const GithubManifest = Schema.Struct({
   postUrl: Schema.String,
   manifest: Schema.String,
-  state: Schema.String
+  state: Schema.String,
+  browserUrl: Schema.String
 })
 export type GithubManifest = typeof GithubManifest.Type
 

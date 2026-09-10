@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { HashIcon } from 'lucide-react'
+import { HashIcon } from '@taut/ui/components/icons'
 import { Button } from '@taut/ui/components/button'
 import { CreateChannelDialog } from '@/components/create-channel-dialog'
 import { EmptyState, PageBody, PageHeader } from '@/components/page'

@@ -7,7 +7,7 @@ import {
   PlusIcon,
   TrashIcon,
   UploadIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { AgentFileGrant, AgentId, FileGrantMode } from '@taut/contract'
 import { Badge } from '@taut/ui/components/badge'
 import { Button } from '@taut/ui/components/button'
@@ -127,7 +127,7 @@ function HomeBrowser({ agentId }: { agentId: AgentId }) {
         </>
       }
     >
-      <div className="mb-2 flex items-center gap-2">
+      <div className="mb-2 flex min-w-0 flex-wrap items-center gap-2">
         <Breadcrumb path={path} onNavigate={setPath} />
         {path === '' ? null : (
           <Button size="xs" variant="ghost" onClick={() => setPath(parentOf(path))}>
@@ -157,25 +157,25 @@ function HomeBrowser({ agentId }: { agentId: AgentId }) {
                 <div
                   className={
                     isDir
-                      ? 'flex w-full items-center gap-2 px-4 py-2.5'
-                      : 'flex items-center gap-2 px-4 py-2.5'
+                      ? 'flex w-full flex-wrap items-center gap-2 px-4 py-2.5'
+                      : 'flex flex-wrap items-center gap-2 px-4 py-2.5'
                   }
                 >
                   {isDir ? (
                     <button
                       type="button"
                       onClick={() => setPath(entry.path)}
-                      className="flex min-w-0 flex-1 items-center gap-2 rounded text-left transition-colors outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                      className="flex min-w-0 flex-1 basis-32 items-center gap-2 rounded text-left transition-colors outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
                     >
                       <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                      <span className="min-w-0 flex-1 basis-32 truncate font-mono text-xs">
                         {baseName(entry.path)}/
                       </span>
                     </button>
                   ) : (
                     <>
                       <FileIcon className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                      <span className="min-w-0 flex-1 basis-32 truncate font-mono text-xs">
                         {baseName(entry.path)}
                       </span>
                     </>
@@ -210,7 +210,7 @@ function GrantForm({ agentId }: { agentId: AgentId }) {
         grantFile.mutate({ agentId, path: path.trim(), mode }, { onSuccess: () => setPath('') })
       }}
     >
-      <div className="min-w-[14rem] flex-1">
+      <div className="min-w-0 flex-1 basis-56">
         <label htmlFor="grant-path" className="sr-only">
           Absolute path
         </label>
@@ -282,7 +282,9 @@ export function AgentFilesTab({
                   key={`${grant.path}:${grant.mode}`}
                   className="flex items-center gap-3 px-4 py-2.5"
                 >
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{grant.path}</span>
+                  <span className="min-w-0 flex-1 basis-32 truncate font-mono text-xs">
+                    {grant.path}
+                  </span>
                   <Badge variant={grant.mode === 'rw' ? 'default' : 'outline'}>
                     {grant.mode === 'rw' ? 'read/write' : 'read only'}
                   </Badge>

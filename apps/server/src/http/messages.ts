@@ -1,3 +1,4 @@
+import { Authorizations } from '../services/authorizations.js'
 import { HttpApiBuilder } from '@effect/platform'
 import { CurrentUser } from '@taut/contract/api'
 import { Effect } from 'effect'
@@ -7,6 +8,24 @@ import { ServerApi } from './serverApi.js'
 
 const group = HttpApiBuilder.group(ServerApi, 'messages', (handlers) =>
   handlers
+    .handle('answerComponent', ({ path, payload }) =>
+      Effect.gen(function* () {
+        const messages = yield* Messages
+        return yield* messages.answerComponent(yield* CurrentUser, path.messageId, payload.answers)
+      })
+    )
+    .handle('authorization', ({ path }) =>
+      Effect.gen(function* () {
+        const authorizations = yield* Authorizations
+        return yield* authorizations.inspect(yield* CurrentUser, path.messageId)
+      })
+    )
+    .handle('decideAuthorization', ({ path, payload }) =>
+      Effect.gen(function* () {
+        const authorizations = yield* Authorizations
+        return yield* authorizations.decide(yield* CurrentUser, path.messageId, payload.decision)
+      })
+    )
     .handle('list', ({ urlParams }) =>
       Effect.gen(function* () {
         const messages = yield* Messages

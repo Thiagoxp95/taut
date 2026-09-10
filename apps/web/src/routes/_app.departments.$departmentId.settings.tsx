@@ -7,7 +7,7 @@ import {
   SlidersHorizontalIcon,
   TrashIcon,
   UsersIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import { Button } from '@taut/ui/components/button'
 import { Input } from '@taut/ui/components/input'
 import type { DepartmentShape } from '@taut/contract'
@@ -308,6 +308,7 @@ function DepartmentSettingsRoute() {
                       className="flex items-center gap-3 px-6 py-3"
                     >
                       <EntityAvatar
+                        memberId={member.memberId}
                         avatar={entry?.avatar ?? { kind: 'emoji', value: '👤' }}
                         kind={member.memberKind}
                         face={entry?.face}

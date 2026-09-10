@@ -231,7 +231,7 @@ const claudeContextEvent = (
  * - `{"type":"system","subtype":"init","session_id","model","tools":[…]}` → `session`
  * - `{"type":"system","subtype":"hook_started"|"hook_response",…}` → ignored
  * - `{"type":"assistant","message":{"content":[{type:text}|{type:tool_use}]},"error"?}` →
- *   `text_delta` / `tool_use` (+ `file_change` for Write/Edit/…) + `context` from
+ *   `text_delta` / `thinking` / `tool_use` (+ `file_change` for Write/Edit/…) + `context` from
  *   `message.usage`; `error` when `error` is set
  *   (e.g. `"authentication_failed"` with a synthetic "Not logged in" text)
  * - `{"type":"user","message":{"content":[{type:tool_result,tool_use_id,content,is_error}]}}` → `tool_result`
@@ -247,6 +247,16 @@ export const parseClaudeLine = (line: string): ReadonlyArray<AgentEvent> => {
 
   switch (json['type']) {
     case 'system': {
+      // SDKStatusMessage / SDKCompactBoundaryMessage in the stream-json protocol.
+      if (json['subtype'] === 'compact_boundary') {
+        return [{ type: 'compaction', compacting: false }]
+      }
+      if (json['subtype'] === 'status') {
+        const status = json['status']
+        return status === 'compacting' || status === null
+          ? [{ type: 'compaction', compacting: status === 'compacting' }]
+          : []
+      }
       if (json['subtype'] !== 'init') return []
       const sessionId = str(json['session_id'])
       if (sessionId === undefined) return [raw(line)]
@@ -277,6 +287,9 @@ export const parseClaudeLine = (line: string): ReadonlyArray<AgentEvent> => {
         if (block['type'] === 'text') {
           const text = str(block['text'])
           if (text !== undefined && text.length > 0) events.push({ type: 'text_delta', text })
+        } else if (block['type'] === 'thinking') {
+          const text = str(block['thinking']) ?? str(block['text'])
+          if (text !== undefined && text.length > 0) events.push({ type: 'thinking', text })
         } else if (block['type'] === 'tool_use') {
           const id = str(block['id']) ?? ''
           const name = str(block['name']) ?? ''

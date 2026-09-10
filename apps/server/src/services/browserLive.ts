@@ -18,16 +18,22 @@
  *   (JPEG, quality 60, max 1280) → frames acked at once, forwarded at ≤ `fps`
  *
  * The session follows the agent: a new page target becomes the one on screen, a
- * destroyed one is replaced by the newest survivor. `dispatch` is the *only* way
- * input reaches the page and it forwards the contract's whitelisted event shapes
+ * destroyed one is replaced by a survivor; tab selection follows page visibility.
+ * `dispatch` is the *only* way input reaches the page and it forwards the contract's whitelisted event shapes
  * as `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent` — never a raw CDP
  * command from a client. Nothing about an input event is ever logged (D17).
  */
-import type { BrowserInputEvent } from '@taut/contract/terminal'
+import type {
+  BrowserInputEvent,
+  BrowserViewport,
+  TerminalBrowserTabs
+} from '@taut/contract/terminal'
 import type { ExecFailed, Machine, MachineUnavailable } from '@taut/runtime'
-import { ExecFailed as ExecFailedError } from '@taut/runtime'
-import { Deferred, Effect, Exit, Queue, Scope, Stream } from 'effect'
+import { BROWSER_PATHS, ExecFailed as ExecFailedError } from '@taut/runtime'
+import { Deferred, Effect, Exit, Queue, Schedule, Scope, Stream } from 'effect'
 import * as http from 'node:http'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { WebSocket } from 'ws'
 
 /** D11: JPEG, quality 60, at most 1280 px wide, 8 frames per second. */
@@ -54,8 +60,12 @@ export interface LiveFrame {
 export interface BrowserSession {
   /** Frames at ≤ `fps`, the latest one winning when the page repaints faster. */
   readonly frames: Stream.Stream<LiveFrame>
+  /** Latest page titles, URLs and the page being streamed. */
+  readonly tabs: Stream.Stream<TerminalBrowserTabs>
   /** Forward one whitelisted event to the page. Failures are swallowed (and never logged with the event). */
   readonly dispatch: (event: BrowserInputEvent) => Effect.Effect<void>
+  /** Reflow the current page to the viewer's available space; retained across tab changes. */
+  readonly resize: (size: BrowserViewport) => Effect.Effect<void>
   /** Settles when the CDP socket is gone (Chromium exited, box stopped). */
   readonly closed: Effect.Effect<void>
 }
@@ -78,6 +88,7 @@ interface TargetInfo {
   readonly type: string
   readonly url: string
   readonly attached: boolean
+  readonly title: string
 }
 
 interface ScreencastMetadata {
@@ -280,25 +291,64 @@ export const openBrowserSession = (
     const closed = yield* Deferred.make<void>()
     const frames = yield* Queue.sliding<LiveFrame>(2)
     yield* Effect.addFinalizer(() => Queue.shutdown(frames))
+    const tabs = yield* Queue.sliding<TerminalBrowserTabs>(1)
+    yield* Effect.addFinalizer(() => Queue.shutdown(tabs))
+    const pages = new Map<string, TargetInfo>()
+    let agentTarget: string | undefined
+    const readAgentTarget = async () => {
+      try {
+        return (
+          (
+            await readFile(join(machine.paths.hostHome, BROWSER_PATHS.activeTarget), 'utf8')
+          ).trim() || undefined
+        )
+      } catch {
+        return undefined
+      }
+    }
 
     // ── the page on screen ────────────────────────────────────────────────
     let current: { targetId: string; sessionId: string } | undefined
     let viewport: ScreencastMetadata = { deviceWidth: 1280, deviceHeight: 720 }
     let switching: Promise<void> = Promise.resolve()
+    let requestedViewport: BrowserViewport | undefined
 
     const call = (method: string, params?: Record<string, unknown>, sessionId?: string) =>
       cdp.send(method, params, sessionId)
+
+    const applyViewport = async (sessionId: string) => {
+      if (requestedViewport === undefined) return
+      await call(
+        'Emulation.setDeviceMetricsOverride',
+        {
+          ...requestedViewport,
+          deviceScaleFactor: 1,
+          mobile: false
+        },
+        sessionId
+      )
+    }
+
+    const publishTabs = () =>
+      Queue.unsafeOffer(tabs, {
+        _tag: 'tabs',
+        tabs: [...pages.values()].map(({ targetId, title, url }) => ({
+          id: targetId,
+          title: title ?? '',
+          url
+        })),
+        activeTabId: current?.targetId ?? null
+      })
 
     const attachTo = async (targetId: string): Promise<void> => {
       const attached = (await call('Target.attachToTarget', { targetId, flatten: true })) as {
         sessionId: string
       }
       current = { targetId, sessionId: attached.sessionId }
-      // A background tab has no live renderer, and `Page.startScreencast` on one never
-      // answers — headless Chromium keeps several `about:blank` pages around, so the
-      // one being watched has to be brought forward first. Best effort: an older build
-      // may not implement it, and the screencast is what matters.
-      await call('Page.bringToFront', {}, attached.sessionId).catch(() => undefined)
+      publishTabs()
+      await applyViewport(attached.sessionId)
+      // Observe the agent's page without activating it: a viewer must never change
+      // browser focus or compete with the agent's tab selection.
       await call(
         'Page.startScreencast',
         {
@@ -316,8 +366,43 @@ export const openBrowserSession = (
       const { targetInfos } = (await call('Target.getTargets')) as {
         targetInfos: Array<TargetInfo>
       }
-      const pages = targetInfos.filter(isPage)
-      const last = pages[pages.length - 1]
+      pages.clear()
+      for (const info of targetInfos.filter(isPage)) pages.set(info.targetId, info)
+      agentTarget = await readAgentTarget()
+      if (agentTarget && pages.has(agentTarget)) return agentTarget
+      // TargetInfo has no active-tab flag. Query visibility without changing focus;
+      // temporary sessions are detached immediately and never start a screencast.
+      for (const info of pages.values()) {
+        let sessionId = current?.targetId === info.targetId ? current.sessionId : undefined
+        const temporary = sessionId === undefined
+        try {
+          if (sessionId === undefined) {
+            sessionId = (
+              (await call('Target.attachToTarget', {
+                targetId: info.targetId,
+                flatten: true
+              })) as { sessionId: string }
+            ).sessionId
+          }
+          const result = (await call(
+            'Runtime.evaluate',
+            {
+              expression: 'document.visibilityState === "visible"',
+              returnByValue: true,
+              silent: true
+            },
+            sessionId
+          )) as { result?: { value?: unknown } }
+          if (result.result?.value === true) return info.targetId
+        } catch {
+          // A page may navigate or close while its visibility is being queried.
+        } finally {
+          if (temporary && sessionId !== undefined) {
+            await call('Target.detachFromTarget', { sessionId }).catch(() => {})
+          }
+        }
+      }
+      const last = [...pages.values()].at(-1)
       if (last !== undefined) return last.targetId
       const created = (await call('Target.createTarget', { url: 'about:blank' })) as {
         targetId: string
@@ -339,12 +424,14 @@ export const openBrowserSession = (
     const switchTo = (targetId: string | undefined): void => {
       switching = switching
         .then(async () => {
-          const id = targetId ?? (await pickPage())
+          const id =
+            agentTarget && pages.has(agentTarget) ? agentTarget : (targetId ?? (await pickPage()))
           if (current?.targetId === id) return
           if (current !== undefined) {
             await call('Target.detachFromTarget', { sessionId: current.sessionId }).catch(() => {})
             current = undefined
           }
+          latest = undefined
           await attachTo(id)
         })
         .catch(() => {
@@ -377,6 +464,14 @@ export const openBrowserSession = (
 
     cdp.events.push((event) => {
       switch (event.method) {
+        case 'Page.screencastVisibilityChanged': {
+          // Chrome emits this when the agent selects another tab, even when neither
+          // URL changes. Find the newly visible page instead of bringing ours forward.
+          if (event.sessionId === current?.sessionId && event.params['visible'] === false) {
+            switchTo(undefined)
+          }
+          return
+        }
         case 'Page.screencastFrame': {
           if (event.sessionId !== current?.sessionId) return
           const params = event.params as {
@@ -398,16 +493,35 @@ export const openBrowserSession = (
           return
         }
         case 'Target.targetCreated': {
-          if (discovering) return
           const info = event.params['targetInfo'] as TargetInfo
-          if (isPage(info)) switchTo(info.targetId)
+          if (!isPage(info)) return
+          pages.set(info.targetId, info)
+          if (!discovering) {
+            publishTabs()
+            switchTo(info.targetId)
+          }
+          return
+        }
+        case 'Target.targetInfoChanged': {
+          const info = event.params['targetInfo'] as TargetInfo
+          if (!isPage(info)) return
+          const previous = pages.get(info.targetId)
+          pages.set(info.targetId, info)
+          if (!discovering) {
+            publishTabs()
+            // A navigation on an existing tab means the agent returned to it.
+            // Title/loading changes on a background page only refresh its label.
+            if (previous !== undefined && previous.url !== info.url) switchTo(info.targetId)
+          }
           return
         }
         case 'Target.targetDestroyed': {
+          pages.delete(String(event.params['targetId']))
           if (event.params['targetId'] === current?.targetId) {
             current = undefined
             switchTo(undefined)
           }
+          publishTabs()
           return
         }
         case 'Target.detachedFromTarget': {
@@ -428,6 +542,16 @@ export const openBrowserSession = (
       },
       catch: (cause) => failure(machine, `cannot start the screencast: ${String(cause)}`, cause)
     })
+
+    // Headless Chromium reports every page as visible and does not emit a tab
+    // visibility event. The MCP bridge records the actual tool-selected target.
+    yield* Effect.promise(async () => {
+      const target = await readAgentTarget()
+      if (target && target !== agentTarget) {
+        agentTarget = target
+        if (pages.has(target)) switchTo(target)
+      }
+    }).pipe(Effect.repeat({ schedule: Schedule.spaced('250 millis') }), Effect.forkScoped)
 
     // Chromium gone (or the box stopped) → the stream ends, the caller reports it.
     cdp.ws.once('close', () => {
@@ -476,8 +600,22 @@ export const openBrowserSession = (
         }
       })
 
+    const resize = (size: BrowserViewport): Effect.Effect<void> =>
+      Effect.promise(async () => {
+        requestedViewport = { width: size.width, height: size.height }
+        // Share the tab-switch queue so a resize cannot land on a detached page.
+        switching = switching
+          .then(async () => {
+            if (current !== undefined) await applyViewport(current.sessionId)
+          })
+          .catch(() => {})
+        await switching
+      })
+
     return {
+      resize,
       frames: Stream.fromQueue(frames).pipe(Stream.takeWhile((frame) => frame !== END)),
+      tabs: Stream.fromQueue(tabs).pipe(Stream.interruptWhen(Deferred.await(closed))),
       dispatch,
       closed: Deferred.await(closed)
     }

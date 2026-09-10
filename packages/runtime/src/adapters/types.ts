@@ -21,7 +21,27 @@ import type { ExecFailed, Machine } from '../machine/types.js'
 // Events
 // ---------------------------------------------------------------------------
 
-const TextDelta = Schema.Struct({ type: Schema.Literal('text_delta'), text: Schema.String })
+const TextDelta = Schema.Struct({
+  type: Schema.Literal('text_delta'),
+  text: Schema.String,
+  /** A complete assistant message, replacing the previous candidate rather than appending. */
+  snapshot: Schema.optional(Schema.Boolean),
+  /** Groups multipart messages on runtimes that expose message boundaries. */
+  messageId: Schema.optional(Schema.String)
+})
+/**
+ * The model's own reasoning, as far as the CLI exposes it. Never part of the
+ * reply: it is the running commentary a reader watches instead of a spinner
+ * (docs/build-plan-activity.md D1), and it is dropped the moment the run ends.
+ *
+ * | runtime     | parsed from                                  |
+ * | ----------- | -------------------------------------------- |
+ * | claude-code | `assistant` content block `{type:"thinking"}` |
+ * | codex       | `item.*` item `{type:"reasoning"}`            |
+ * | opencode    | part `{type:"reasoning"}`                     |
+ * | cursor      | — (says nothing about reasoning)              |
+ */
+const Thinking = Schema.Struct({ type: Schema.Literal('thinking'), text: Schema.String })
 const ToolUse = Schema.Struct({
   type: Schema.Literal('tool_use'),
   id: Schema.String,
@@ -103,15 +123,21 @@ const ErrorEvent = Schema.Struct({
   code: Schema.optional(Schema.String)
 })
 const Raw = Schema.Struct({ type: Schema.Literal('raw'), line: Schema.String })
+const Compaction = Schema.Struct({
+  type: Schema.Literal('compaction'),
+  compacting: Schema.Boolean
+})
 
 export const AgentEvent = Schema.Union(
   TextDelta,
+  Thinking,
   ToolUse,
   ToolResult,
   FileChange,
   Session,
   Usage,
   Context,
+  Compaction,
   Done,
   ErrorEvent,
   Raw

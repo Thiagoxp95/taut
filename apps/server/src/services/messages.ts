@@ -1,3 +1,5 @@
+import type { ComponentAnswer, MessageComponent } from '@taut/contract/domain'
+import type { AuthorizationRequest } from '@taut/contract/domain'
 import { SqlClient } from '@effect/sql'
 import type { CurrentUserShape } from '@taut/contract/api'
 import {
@@ -10,7 +12,7 @@ import {
   type ThreadParticipant,
   ThreadSummary
 } from '@taut/contract/domain'
-import { Forbidden, NotFound, type Unauthorized, Validation } from '@taut/contract/errors'
+import { Conflict, Forbidden, NotFound, type Unauthorized, Validation } from '@taut/contract/errors'
 import type { Mention } from '@taut/contract/events'
 import {
   AgentId,
@@ -26,7 +28,7 @@ import {
   newMessageId,
   newNotificationId
 } from '@taut/contract/ids'
-import { Effect, Option, Schema } from 'effect'
+import { DateTime, Effect, Option, Schema } from 'effect'
 import { Count, findAll, findOne, nowIso, run, single } from '../db/sql.js'
 import {
   type ChannelRow,
@@ -49,7 +51,7 @@ const encodeOverride = Schema.encodeSync(RunOverride)
 export const MAX_PAGE = 100
 const DEFAULT_PAGE = 50
 const MESSAGE_COLUMNS =
-  'id, company_id, channel_id, thread_id, author_kind, author_id, body, status, seq, error, created_at, edited_at, run_override'
+  'id, company_id, channel_id, thread_id, author_kind, author_id, body, status, seq, error, created_at, edited_at, run_override, authorization_json, component_json'
 
 export interface Page<A> {
   readonly items: ReadonlyArray<A>
@@ -79,6 +81,8 @@ export interface Author {
 }
 
 export interface AgentPostInput {
+  readonly component?: MessageComponent | undefined
+  readonly authorization?: AuthorizationRequest | undefined
   readonly agentId: AgentId
   readonly channelId: ChannelId
   /** Root message to reply under; `undefined` posts top-level. */
@@ -97,6 +101,8 @@ export interface UserPostInput {
   /** Root message to reply under; `undefined` posts top-level. */
   readonly threadId?: MessageId | undefined
   readonly body: string
+  /** Original source time for imported comments; ordinary posts use the current time. */
+  readonly createdAt?: DateTime.Utc | undefined
 }
 
 /** Messages, threads, mentions and the notification fan-out of §8. */
@@ -218,7 +224,8 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
         error: Schema.NullOr(Schema.String)
       }),
       execute: (r) => sql`
-        UPDATE messages SET status = ${r.status}, error = ${r.error}
+        UPDATE messages SET status = ${r.status}, error = ${r.error},
+          created_at = CASE WHEN status = 'streaming' THEN ${nowIso()} ELSE created_at END
         WHERE company_id = ${r.companyId} AND id = ${r.messageId}`
     })
 
@@ -680,9 +687,12 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
         readonly author: Author
         readonly body: string
         readonly status: MessageStatus
+        readonly createdAt?: DateTime.Utc | undefined
         readonly mentions: ReadonlyArray<Mention>
         /** Orphan uploads to link to the new row before it is loaded and announced (D2). */
         readonly attachmentIds?: ReadonlyArray<AttachmentId> | undefined
+        readonly component?: MessageComponent | undefined
+        readonly authorization?: AuthorizationRequest | undefined
         /** What this message asks its run to use (docs/build-plan-run-overrides.md D1). */
         readonly runOverride?: RunOverride | undefined
       }
@@ -702,7 +712,7 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
           body: input.body,
           status: input.status,
           seq,
-          createdAt: nowIso(),
+          createdAt: input.createdAt === undefined ? nowIso() : DateTime.formatIso(input.createdAt),
           runOverride:
             input.runOverride === undefined
               ? null
@@ -717,6 +727,16 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
             input.attachmentIds
           )
         }
+        if (input.component !== undefined) {
+          yield* sql`UPDATE messages SET component_json = ${JSON.stringify(input.component)} WHERE id = ${id} AND company_id = ${input.companyId}`.pipe(
+            Effect.orDie
+          )
+        }
+        if (input.authorization !== undefined) {
+          yield* sql`UPDATE messages SET authorization_json = ${JSON.stringify(input.authorization)} WHERE id = ${id} AND company_id = ${input.companyId}`.pipe(
+            Effect.orDie
+          )
+        }
         let message = yield* loadMessage(input.companyId, id)
         const created = yield* emit({
           type: 'message.created',
@@ -728,6 +748,27 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
         }
         return { message, seq: created.seq }
       })
+
+    /** Restore a source timestamp without treating a historical comment as a new post. */
+    const restoreImportedCreatedAt = (
+      companyId: CompanyId,
+      messageId: MessageId,
+      createdAt: DateTime.Utc
+    ): Effect.Effect<void> =>
+      publisher.transact(companyId, (emit) =>
+        Effect.gen(function* () {
+          const row = yield* byId({ companyId, messageId })
+          const iso = DateTime.formatIso(createdAt)
+          if (Option.isNone(row) || DateTime.formatIso(row.value.created_at) === iso) return
+          yield* sql`UPDATE messages SET created_at = ${iso}
+            WHERE company_id = ${companyId} AND id = ${messageId}`.pipe(Effect.orDie)
+          const message = yield* loadMessage(companyId, messageId)
+          yield* emit({ type: 'message.updated', payload: { message } })
+          if (row.value.thread_id !== null) {
+            yield* emitThreadSummary(emit, companyId, row.value.thread_id)
+          }
+        })
+      )
 
     // ── endpoints ────────────────────────────────────────────────────────────
 
@@ -780,6 +821,15 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
         yield* checkOverride(who.companyId, input.runOverride)
         const channel = yield* channels.load(who, input.channelId)
         yield* channels.requirePost(who, channel)
+        /**
+         * D21: posting into an issue thread joins you to its hidden channel, if
+         * you are not in it already. Reading one needs no membership (D22), but
+         * saying something does — otherwise the reply you just wrote gives you no
+         * unread cursor, and the thread you are now part of never badges again.
+         */
+        if (channels.isProjectThread(channel)) {
+          yield* channels.join(channel.id, { memberKind: 'user', memberId: who.userId })
+        }
         let threadId: MessageId | null = null
         if (input.threadId !== undefined) {
           const root = yield* load(who, input.threadId)
@@ -890,6 +940,44 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
           )
         )
       })
+
+    /** Ownership and cascade checks share the deletion transaction with authorization decisions. */
+    const deleteAsAgent = (
+      companyId: CompanyId,
+      agentId: AgentId,
+      messageId: MessageId
+    ): Effect.Effect<void, NotFound | Forbidden | Conflict> =>
+      publisher.transact(companyId, (emit) =>
+        Effect.gen(function* () {
+          const found = yield* byId({ companyId, messageId })
+          if (Option.isNone(found)) return yield* new NotFound({ entity: 'Message', id: messageId })
+          const row = found.value
+          if (row.author_kind !== 'agent' || row.author_id !== agentId)
+            return yield* new Forbidden({ message: 'You can only delete your own messages' })
+          if (
+            !(yield* channels.isMember(row.channel_id, { memberKind: 'agent', memberId: agentId }))
+          )
+            return yield* new Forbidden({ message: 'You are not in that channel' })
+          if (row.status === 'streaming')
+            return yield* new Conflict({ reason: 'This message is still streaming' })
+          const replies = yield* threadCounts({ companyId, ids: [messageId] })
+          if (replies.some((reply) => reply.n > 0))
+            return yield* new Conflict({
+              reason: 'This message has replies and cannot be deleted by an agent'
+            })
+          yield* attachments.deleteForMessage(companyId, messageId)
+          yield* remove({ companyId, messageId })
+          yield* emit({
+            type: 'message.deleted',
+            payload: {
+              messageId,
+              channelId: row.channel_id,
+              ...(row.thread_id === null ? {} : { threadId: row.thread_id })
+            }
+          })
+          if (row.thread_id !== null) yield* emitThreadSummary(emit, companyId, row.thread_id)
+        })
+      )
 
     const thread = (
       me: CurrentUserShape,
@@ -1032,11 +1120,113 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
               author,
               body: input.body,
               status: 'sent',
+              authorization: input.authorization,
+              component: input.component,
               mentions,
               attachmentIds
             })
             yield* fanOut(emit, companyId, author, channel, message, seq, mentions, broadcast)
             if (threadId !== null) yield* emitThreadSummary(emit, companyId, threadId)
+            return message
+          })
+        )
+      })
+
+    /** Validate and publish the complete answer once, under the same transaction as the card. */
+    const answerComponent = (
+      me: CurrentUserShape,
+      messageId: MessageId,
+      answers: readonly ComponentAnswer[]
+    ) =>
+      Effect.gen(function* () {
+        const who = yield* actor(me)
+        return yield* publisher.transact(who.companyId, (emit) =>
+          Effect.gen(function* () {
+            const row = yield* load(who, messageId)
+            const original = yield* loadMessage(who.companyId, row.id)
+            const component = original.component
+            if (component?.kind !== 'questions')
+              return yield* new NotFound({ entity: 'Question', id: messageId })
+            if (component.recipientId !== who.userId)
+              return yield* new Forbidden({
+                message: 'Only the person asked can answer this question.'
+              })
+            if (component.status !== 'pending')
+              return yield* new Conflict({ reason: 'These questions have already been answered.' })
+            const invalid = () =>
+              new Validation({
+                issues: [
+                  {
+                    path: ['answers'],
+                    message:
+                      'Answer every question using its choices or your own text. Use each question and choice only once.'
+                  }
+                ]
+              })
+            if (
+              answers.length !== component.questions.length ||
+              new Set(answers.map((a) => a.questionId)).size !== answers.length
+            )
+              return yield* invalid()
+            for (const question of component.questions) {
+              const answer = answers.find((a) => a.questionId === question.id)
+              if (
+                answer === undefined ||
+                (answer.selections.length === 0 && !answer.text?.trim()) ||
+                (!question.multiSelect && answer.selections.length > 1) ||
+                new Set(answer.selections).size !== answer.selections.length ||
+                answer.selections.some(
+                  (label) => !question.options.some((option) => option.label === label)
+                )
+              )
+                return yield* invalid()
+            }
+            const channel = yield* channelRow(who.companyId, original.channelId)
+            yield* channels.requirePost(who, channel)
+            const body = component.questions
+              .map((q) => {
+                const a = answers.find((a) => a.questionId === q.id)!
+                return `${q.question}\n${[...a.selections, a.text?.trim()].filter(Boolean).join(' — ')}`
+              })
+              .join('\n\n')
+            // Mention only the asking agent, not arbitrary @handles in the submitted answer.
+            const handles = yield* sql<{
+              handle: string
+            }>`SELECT handle FROM agents WHERE id = ${original.authorId} AND company_id = ${who.companyId}`.pipe(
+              Effect.orDie
+            )
+            const mentions: readonly Mention[] = [
+              { memberKind: 'agent', memberId: original.authorId, handle: handles[0]?.handle ?? '' }
+            ]
+            const author: Author = { kind: 'user', id: who.userId }
+            const replyThreadId = original.threadId ?? original.id
+            const { message: reply, seq } = yield* insertAndEmit(emit, {
+              companyId: who.companyId,
+              channelId: original.channelId,
+              threadId: replyThreadId,
+              author,
+              body,
+              status: 'sent',
+              mentions
+            })
+            yield* sql`UPDATE asks SET status = 'answered', reply_message_id = ${reply.id}, answered_at = ${nowIso()}
+            WHERE company_id = ${who.companyId} AND message_id = ${messageId} AND status = 'pending'`.pipe(
+              Effect.orDie
+            )
+            const updated: MessageComponent = {
+              ...component,
+              status: 'answered',
+              answers,
+              answeredBy: who.userId,
+              answeredAt: nowIso()
+            }
+            yield* sql`UPDATE messages SET component_json = ${JSON.stringify(updated)} WHERE company_id = ${who.companyId} AND id = ${messageId}`.pipe(
+              Effect.orDie
+            )
+            const message = yield* loadMessage(who.companyId, messageId)
+            yield* emit({ type: 'message.updated', payload: { message } })
+            yield* fanOut(emit, who.companyId, author, channel, reply, seq, mentions, false)
+            yield* emitThreadSummary(emit, who.companyId, replyThreadId)
             return message
           })
         )
@@ -1075,6 +1265,7 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
               author,
               body: input.body,
               status: 'sent',
+              createdAt: input.createdAt,
               mentions
             })
             yield* fanOut(emit, companyId, author, channel, message, seq, mentions, broadcast)
@@ -1138,6 +1329,8 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
     /**
      * Close a streaming message (`sent` or `failed`) inside the caller's transaction and
      * emit `message.updated`; the caller emits `agent.task.done/failed` with the result.
+     * Its timestamp becomes the publication time, so an early placeholder does not put
+     * the final answer above the tool-posted questions and replies that preceded it.
      */
     const finalizeAgentMessage = (
       emit: Emit,
@@ -1224,8 +1417,10 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
       create,
       edit,
       delete: del,
+      deleteAsAgent,
       thread,
       // server-internal
+      restoreImportedCreatedAt,
       byId: (companyId: CompanyId, messageId: MessageId): Effect.Effect<Option.Option<Message>> =>
         byId({ companyId, messageId }).pipe(
           Effect.flatMap(
@@ -1236,10 +1431,27 @@ export class Messages extends Effect.Service<Messages>()('Messages', {
           )
         ),
       threadRoot,
+      resolveMentions,
       recent,
       since,
       agentTurnCount: (companyId: CompanyId, threadId: MessageId): Effect.Effect<number> =>
         agentTurns({ companyId, threadId }).pipe(Effect.map((c) => c.n)),
+      /** Used inside the decision transaction; only the approval service calls this. */
+      setAuthorization: (
+        emit: Emit,
+        companyId: CompanyId,
+        messageId: MessageId,
+        authorization: AuthorizationRequest
+      ) =>
+        Effect.gen(function* () {
+          yield* sql`UPDATE messages SET authorization_json = ${JSON.stringify(authorization)} WHERE company_id = ${companyId} AND id = ${messageId}`.pipe(
+            Effect.orDie
+          )
+          const message = yield* loadMessage(companyId, messageId)
+          yield* emit({ type: 'message.updated', payload: { message } })
+          return message
+        }),
+      answerComponent,
       postAsAgent,
       postAsUser,
       editAsSystem,

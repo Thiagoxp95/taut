@@ -294,18 +294,158 @@ describe('workspace: browser live view + take control (D11, D12, D15, D16, D17)'
       })
     )
 
+    it.effect('live tabs follow new pages and navigation back to an existing page', () =>
+      Effect.gen(function* () {
+        const { ws } = yield* baseUrl
+        const dana = need(state.dana, 'dana')
+        const mila = need(state.mila, 'mila')
+        const client = yield* connectTerminal(
+          `${ws}/ws/terminal?agentId=${mila.id}&pty=0`,
+          yield* dana.cookieHeader
+        )
+        yield* Effect.addFinalizer(() =>
+          Effect.promise(async () => {
+            await client.close()
+            cdp.createPage('page-1', 'Example', 'https://example.com/')
+            cdp.closePage('search')
+          })
+        )
+        const nextTabs = (activeTabId: string) =>
+          Effect.promise(async () => {
+            for (;;) {
+              const frame = await client.nextOf('tabs')
+              if (frame.activeTabId === activeTabId) return frame
+            }
+          })
+        expect(yield* nextTabs('page-1')).toEqual({
+          _tag: 'tabs',
+          activeTabId: 'page-1',
+          tabs: [{ id: 'page-1', title: 'Example', url: 'https://example.com/' }]
+        })
+
+        client.send({ _tag: 'viewport', width: 540, height: 1100 })
+        yield* waitFor(
+          'browser resized to the pane',
+          Effect.sync(() => {
+            const resized = cdp.calls.find(
+              (call) =>
+                call.method === 'Emulation.setDeviceMetricsOverride' &&
+                call.params?.['height'] === 1100
+            )
+            return resized ? Option.some(resized) : Option.none()
+          })
+        )
+        expect(
+          cdp.calls.find((call) => call.method === 'Emulation.setDeviceMetricsOverride')?.params
+        ).toMatchObject({ width: 540, height: 1100, mobile: false })
+
+        cdp.createPage('search', 'Search', 'https://search.example/')
+        expect(yield* nextTabs('search')).toEqual({
+          _tag: 'tabs',
+          activeTabId: 'search',
+          tabs: [
+            { id: 'page-1', title: 'Example', url: 'https://example.com/' },
+            { id: 'search', title: 'Search', url: 'https://search.example/' }
+          ]
+        })
+        cdp.emitFrame(Buffer.from('search-page').toString('base64'), 'search')
+        let frame = yield* Effect.promise(() => client.nextOf('frame'))
+        while (unb64(frame.data) !== 'search-page') {
+          frame = yield* Effect.promise(() => client.nextOf('frame'))
+        }
+        expect(unb64(frame.data)).toBe('search-page')
+
+        cdp.selectPage('page-1')
+        expect((yield* nextTabs('page-1')).tabs[0]?.url).toBe('https://example.com/')
+        expect(
+          cdp.calls.filter((call) =>
+            ['Page.bringToFront', 'Target.activateTarget'].includes(call.method)
+          )
+        ).toEqual([])
+        cdp.selectPage('search')
+        yield* nextTabs('search')
+
+        cdp.updatePage('page-1', 'Recipe', 'https://example.com/recipe')
+        expect((yield* nextTabs('page-1')).tabs).toEqual([
+          { id: 'page-1', title: 'Recipe', url: 'https://example.com/recipe' },
+          { id: 'search', title: 'Search', url: 'https://search.example/' }
+        ])
+        cdp.updatePage('search', 'Search results', 'https://search.example/')
+        expect((yield* nextTabs('page-1')).tabs[1]?.title).toBe('Search results')
+        cdp.closePage('page-1')
+        expect((yield* nextTabs('search')).tabs).toEqual([
+          { id: 'search', title: 'Search results', url: 'https://search.example/' }
+        ])
+        // Restore the fixture for the independent control scenarios below.
+        cdp.createPage('page-1', 'Example', 'https://example.com/')
+        yield* nextTabs('page-1')
+        cdp.closePage('search')
+      }).pipe(Effect.scoped)
+    )
+
+    it.effect(
+      'browser previews coexist with a terminal and overlapping follow-up connections',
+      () =>
+        Effect.gen(function* () {
+          const { ws } = yield* baseUrl
+          const dana = need(state.dana, 'dana')
+          const mila = need(state.mila, 'mila')
+          const cookie = yield* dana.cookieHeader
+          const connect = (pty: boolean) =>
+            connectTerminal(`${ws}/ws/terminal?agentId=${mila.id}&pty=${pty ? 1 : 0}`, cookie).pipe(
+              Effect.tap((client) =>
+                Effect.addFinalizer(() =>
+                  Effect.promise(async () => {
+                    if (client.ws.readyState !== WebSocket.CLOSED) client.ws.close()
+                    await client.closed
+                  })
+                )
+              )
+            )
+          const terminal = yield* connect(true)
+          expect((yield* Effect.promise(() => terminal.next()))._tag).toBe('ready')
+          const ptys = handles.length
+          const preview = yield* connect(false)
+          expect((yield* Effect.promise(() => preview.next()))._tag).toBe('ready')
+          yield* Effect.promise(() => preview.nextOf('frame'))
+          const followup = yield* connect(false)
+          expect((yield* Effect.promise(() => followup.next()))._tag).toBe('ready')
+          yield* Effect.promise(() => followup.nextOf('frame'))
+          preview.send({ _tag: 'control', hold: true })
+          expect(yield* Effect.promise(() => preview.nextOf('control'))).toMatchObject({
+            holder: state.danaId,
+            owned: true
+          })
+          expect(yield* Effect.promise(() => followup.nextOf('control'))).toMatchObject({
+            holder: state.danaId,
+            owned: false
+          })
+          preview.send({ _tag: 'control', hold: false })
+          expect(yield* Effect.promise(() => preview.nextOf('control'))).toMatchObject({
+            holder: null,
+            owned: false
+          })
+          expect(handles).toHaveLength(ptys)
+          const terminals = yield* TerminalWsServer
+          expect(yield* terminals.openCount(mila.id)).toBe(1)
+          // Browser previews must not weaken the one-shell-per-viewer limit.
+          const duplicate = yield* connect(true)
+          expect((yield* Effect.promise(() => duplicate.next()))._tag).toBe('error')
+        }).pipe(Effect.scoped)
+    )
+
     it.effect('D12: input is dropped without control; with it, events reach the page scaled', () =>
       Effect.gen(function* () {
         const { ws } = yield* baseUrl
         const dana = need(state.dana, 'dana')
         const mila = need(state.mila, 'mila')
         const client = yield* connectTerminal(
-          `${ws}/ws/terminal?agentId=${mila.id}`,
+          `${ws}/ws/terminal?agentId=${mila.id}&pty=0`,
           yield* dana.cookieHeader
         )
         yield* Effect.promise(() => client.nextOf('ready'))
         const initial = yield* Effect.promise(() => client.nextOf('control'))
-        expect(initial).toEqual({ _tag: 'control', holder: null, paused: false })
+        expect(initial).toEqual({ _tag: 'control', holder: null, paused: false, owned: false })
         const live = yield* Effect.promise(() =>
           client.nextOf('browser').then((f) => (f.state === 'live' ? f : client.nextOf('browser')))
         )
@@ -332,6 +472,7 @@ describe('workspace: browser live view + take control (D11, D12, D15, D16, D17)'
         expect(taken).toEqual({
           _tag: 'control',
           holder: need(state.danaId, 'danaId'),
+          owned: true,
           paused: false
         })
         const terminals = yield* TerminalWsServer
@@ -411,7 +552,7 @@ describe('workspace: browser live view + take control (D11, D12, D15, D16, D17)'
 
         client.send({ _tag: 'control', hold: false })
         const released = yield* Effect.promise(() => client.nextOf('control'))
-        expect(released).toEqual({ _tag: 'control', holder: null, paused: false })
+        expect(released).toEqual({ _tag: 'control', holder: null, paused: false, owned: false })
         client.send({
           _tag: 'input',
           event: { _tag: 'mouse', type: 'mouseMoved', x: 0.2, y: 0.2 }
@@ -439,7 +580,7 @@ describe('workspace: browser live view + take control (D11, D12, D15, D16, D17)'
         yield* Effect.promise(() => second.nextOf('ready'))
         // a joining viewer learns who is driving
         const seen = yield* Effect.promise(() => second.nextOf('control'))
-        expect(seen).toEqual({ _tag: 'control', holder: state.danaId, paused: false })
+        expect(seen).toEqual({ _tag: 'control', holder: state.danaId, paused: false, owned: false })
         second.send({ _tag: 'control', hold: true })
         const refused = yield* Effect.promise(() => second.nextOf('control'))
         expect(refused.holder).toBe(state.danaId)
@@ -448,7 +589,7 @@ describe('workspace: browser live view + take control (D11, D12, D15, D16, D17)'
         // the holder disconnects → everyone else sees the release
         yield* Effect.promise(() => first.close())
         const released = yield* Effect.promise(() => second.nextOf('control'))
-        expect(released).toEqual({ _tag: 'control', holder: null, paused: false })
+        expect(released).toEqual({ _tag: 'control', holder: null, paused: false, owned: false })
         second.send({ _tag: 'control', hold: true })
         const mine = yield* Effect.promise(() => second.nextOf('control'))
         expect(mine.holder).toBe(state.ownerId)
@@ -488,10 +629,10 @@ describe('workspace: browser live view + take control (D11, D12, D15, D16, D17)'
             'the browser MCP server written for the task',
             Effect.sync(() => Option.fromNullable(fake.mcpConfigs().find((c) => c.browser)))
           )
-          expect(mcp?.browser?.args.slice(0, 3)).toEqual([
-            '--cdp-endpoint',
-            'http://127.0.0.1:9222',
-            '--output-dir'
+          expect(mcp?.browser?.command).toBe('node')
+          expect(mcp?.browser?.args.slice(1, 3)).toEqual([
+            'playwright-mcp',
+            'http://127.0.0.1:9222'
           ])
           expect(mcp?.browser?.args[3]).toMatch(/\/\.taut\/browser\/out$/)
 
@@ -511,12 +652,17 @@ describe('workspace: browser live view + take control (D11, D12, D15, D16, D17)'
 
           client.send({ _tag: 'control', hold: true, pause: true })
           const paused = yield* Effect.promise(() => client.nextOf('control'))
-          expect(paused).toEqual({ _tag: 'control', holder: state.danaId, paused: true })
+          expect(paused).toEqual({
+            _tag: 'control',
+            holder: state.danaId,
+            paused: true,
+            owned: true
+          })
           expect(fake.signals.slice(signalsBefore)).toEqual(['STOP'])
 
           client.send({ _tag: 'control', hold: false })
           const released = yield* Effect.promise(() => client.nextOf('control'))
-          expect(released).toEqual({ _tag: 'control', holder: null, paused: false })
+          expect(released).toEqual({ _tag: 'control', holder: null, paused: false, owned: false })
           expect(fake.signals.slice(signalsBefore)).toEqual(['STOP', 'CONT'])
 
           // disconnecting while paused resumes the agent too

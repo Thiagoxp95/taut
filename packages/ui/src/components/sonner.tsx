@@ -1,5 +1,13 @@
 import * as React from 'react'
 import { Toaster as SonnerToaster, toast } from 'sonner'
+import {
+  CircleCheckIcon,
+  AlertCircleIcon,
+  InfoIcon,
+  Loader2Icon,
+  TriangleAlertIcon,
+  XIcon
+} from '@taut/ui/components/icons'
 
 type ToasterProps = React.ComponentProps<typeof SonnerToaster>
 
@@ -34,6 +42,14 @@ function Toaster({ ...props }: ToasterProps) {
       theme={theme}
       className="toaster group"
       position="bottom-right"
+      icons={{
+        success: <CircleCheckIcon className="size-4" />,
+        info: <InfoIcon className="size-4" />,
+        warning: <TriangleAlertIcon className="size-4" />,
+        error: <AlertCircleIcon className="size-4" />,
+        loading: <Loader2Icon className="size-4 animate-spin" />,
+        close: <XIcon className="size-3" />
+      }}
       style={
         {
           '--normal-bg': 'var(--popover)',

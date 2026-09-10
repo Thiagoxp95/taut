@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { FolderGitIcon, GitBranchIcon } from 'lucide-react'
+import { FolderGitIcon, GitBranchIcon } from '@taut/ui/components/icons'
 import type { AgentId, AgentRepoGrant, FileGrantMode, Repository } from '@taut/contract'
 import { Badge } from '@taut/ui/components/badge'
 import { Button } from '@taut/ui/components/button'
@@ -54,7 +54,7 @@ export function RepoAccessControl({
     <div
       role="radiogroup"
       aria-label={label}
-      className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted p-0.5"
+      className="flex min-w-0 max-w-full flex-wrap items-center gap-0.5 rounded-md bg-muted p-0.5"
     >
       {REPO_ACCESS_ORDER.map((access) => {
         const selected = value === access
@@ -95,7 +95,7 @@ export function RepoAccessRow({
 
   return (
     <li className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-      <div className="min-w-[12rem] flex-1">
+      <div className="min-w-0 flex-1 basis-48">
         <p className="flex items-center gap-2 truncate text-sm font-medium">
           <span className="truncate font-mono">{repository.fullName}</span>
           {repository.private ? (

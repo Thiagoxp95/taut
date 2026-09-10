@@ -1,0 +1,122 @@
+name: macOS desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      signed:
+        description: Sign and notarize a release (requires Apple secrets)
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_MODE: ${{ startsWith(github.ref, 'refs/tags/') || inputs.signed }}
+      ARTIFACT_DIR: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.signed) && 'release' || 'unsigned' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @taut/desktop test:release
+      - name: Build unsigned local testing artifacts
+        if: env.RELEASE_MODE != 'true'
+        run: pnpm --filter @taut/desktop package:mac --arch=${{ matrix.arch }}
+      - name: Build signed and notarized artifacts
+        if: env.RELEASE_MODE == 'true'
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MAC_APPLE_API_KEY: ${{ secrets.MAC_APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          if [ -n "$MAC_APPLE_API_KEY" ]; then
+            export APPLE_API_KEY="$RUNNER_TEMP/taut-notarization.p8"
+            trap 'rm -f "$APPLE_API_KEY"' EXIT
+            python3 - <<'PY'
+          import base64, os
+          with open(os.open(os.environ['APPLE_API_KEY'], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as key:
+              key.write(base64.b64decode(os.environ['MAC_APPLE_API_KEY'], validate=True))
+          PY
+          fi
+          unset MAC_APPLE_API_KEY
+          pnpm --filter @taut/desktop release:mac --arch=${{ matrix.arch }}
+      - name: Verify DMG, bundle and release signature
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mode=unsigned
+          if [ "$RELEASE_MODE" = true ]; then mode=release; fi
+          output="apps/desktop/dist/$mode"
+          dmg=$(find "$output" -maxdepth 1 -name '*.dmg' -print)
+          test -n "$dmg"
+          hdiutil verify "$dmg"
+          mountpoint=$(mktemp -d)
+          hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint"; rmdir "$mountpoint"' EXIT
+          app="$mountpoint/Taut.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = dev.taut.desktop
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
+          expected_arch="$ARCH"
+          if [ "$ARCH" = x64 ]; then expected_arch=x86_64; fi
+          test "$(lipo -archs "$app/Contents/MacOS/Taut")" = "$expected_arch"
+          if [ "$RELEASE_MODE" = true ]; then
+            codesign --verify --deep --strict --verbose=2 "$app"
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=2 "$app"
+          fi
+          (cd "$output" && shasum -a 256 *.dmg *.zip > "SHA256SUMS-$ARCH.txt")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Taut-mac-${{ matrix.arch }}-${{ env.RELEASE_MODE == 'true' && 'release' || 'unsigned' }}
+          path: |
+            apps/desktop/dist/${{ env.ARTIFACT_DIR }}/*.dmg
+            apps/desktop/dist/${{ env.ARTIFACT_DIR }}/*.zip
+            apps/desktop/dist/${{ env.ARTIFACT_DIR }}/SHA256SUMS-*.txt
+          if-no-files-found: error
+
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Taut-mac-*-release
+          path: artifacts
+          merge-multiple: true
+      - name: Prepare draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "Taut $RELEASE_TAG" --generate-notes artifacts/*

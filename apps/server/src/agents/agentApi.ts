@@ -1,3 +1,5 @@
+import type { MessageComponent, RenderComponentRequest } from '@taut/contract/domain'
+import { Authorizations } from '../services/authorizations.js'
 /**
  * What the `taut` MCP server / CLI calls from inside a machine (`packages/taut-mcp/src/protocol.ts`).
  * The sender is always the token's agent; the task's channel/thread is the default place to
@@ -34,6 +36,7 @@ import type {
   Agent,
   AgentSkill,
   FileGrantMode,
+  IssueDetail,
   Message,
   Repository,
   Signal,
@@ -52,6 +55,9 @@ import {
 } from '@taut/contract/ids'
 import { CONTAINER_HOME, MachineProviderTag } from '@taut/runtime'
 import type {
+  AgentSearchRequest,
+  AgentSearchResponse,
+  DiscoverableAgent,
   AskCreated,
   AskRequest,
   AskStatus,
@@ -71,9 +77,14 @@ import type {
   HandoffResponse,
   InboxMessage,
   InboxResponse,
+  GetIssueRequest,
+  IssueSummary,
   LinearProjectsResponse,
+  UpdateIssueRequest,
   ReactRequest,
   ReactResponse,
+  DeleteRequest,
+  DeleteResponse,
   SendRequest,
   SendResponse,
   Sender,
@@ -109,6 +120,7 @@ import { EventLog } from '../realtime/eventLog.js'
 import { userHandle } from '../services/access.js'
 import { Agents } from '../services/agents.js'
 import { Attachments, type HostFile, humanSize } from '../services/attachments.js'
+import { Canvases, type CanvasScope } from '../services/canvases.js'
 import { Channels } from '../services/channels.js'
 import { Handovers } from '../services/handovers.js'
 import { AgentHomes } from '../services/homes.js'
@@ -262,8 +274,90 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
     const repositories = yield* Repositories
     const github = yield* GitHubApp
     const projects = yield* Projects
+    const canvases = yield* Canvases
+    const authorizations = yield* Authorizations
 
     // ── queries ──────────────────────────────────────────────────────────────
+
+    // Select only public capability metadata, scoped before searching. EXISTS avoids
+    // duplicating colleagues who share more than one department with the caller.
+    const departmentAgentRows = findAll({
+      Request: Schema.Struct({ companyId: CompanyId, agentId: AgentId }),
+      Result: Schema.Struct({
+        id: AgentId,
+        handle: Schema.String,
+        name: Schema.String,
+        role: Schema.String,
+        status: Schema.Literal('active', 'paused'),
+        skill_name: Schema.NullOr(Schema.String),
+        skill_description: Schema.NullOr(Schema.String)
+      }),
+      execute: (r) => sql`
+        SELECT a.id, a.handle, a.name, a.role, a.status,
+          s.name AS skill_name, s.description AS skill_description
+        FROM agents a
+        LEFT JOIN agent_skills s ON s.agent_id = a.id AND s.state = 'active'
+        WHERE a.company_id = ${r.companyId} AND a.id != ${r.agentId}
+          AND a.archived_at IS NULL
+          AND EXISTS (
+            SELECT 1 FROM department_members mine
+            JOIN department_members peer ON peer.department_id = mine.department_id
+            JOIN departments d ON d.id = mine.department_id
+            WHERE mine.member_kind = 'agent' AND mine.member_id = ${r.agentId}
+              AND peer.member_kind = 'agent' AND peer.member_id = a.id
+              AND d.company_id = ${r.companyId}
+          )
+        ORDER BY a.handle, a.id, s.name`
+    })
+
+    const agentSearch = (
+      principal: TokenPrincipal,
+      input: AgentSearchRequest
+    ): Effect.Effect<AgentSearchResponse, ApiFailure> =>
+      Effect.gen(function* () {
+        yield* context(principal)
+        const rows = yield* departmentAgentRows(principal)
+        const peers = new Map<string, DiscoverableAgent>()
+        for (const row of rows) {
+          const peer = peers.get(row.id) ?? {
+            id: row.id,
+            handle: row.handle,
+            name: row.name,
+            role: row.role,
+            status: row.status,
+            skills: []
+          }
+          peers.set(row.id, {
+            ...peer,
+            skills:
+              row.skill_name === null
+                ? peer.skills
+                : [
+                    ...peer.skills,
+                    { name: row.skill_name, description: row.skill_description ?? '' }
+                  ]
+          })
+        }
+        const terms = (input.query ?? '')
+          .trim()
+          .toLowerCase()
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((term) => term.replace(/^@/, ''))
+        const matches = [...peers.values()].filter((peer) => {
+          const text = [
+            peer.handle,
+            peer.name,
+            peer.role,
+            ...peer.skills.flatMap((skill) => [skill.name, skill.description])
+          ]
+            .join(' ')
+            .toLowerCase()
+          return terms.every((term) => text.includes(term))
+        })
+        const limit = input.limit ?? 20
+        return { agents: matches.slice(0, limit), hasMore: matches.length > limit }
+      })
 
     const channelByName = findAll({
       Request: Schema.Struct({ companyId: CompanyId, name: Schema.String }),
@@ -484,7 +578,8 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
     const route = (
       ctx: Ctx,
       target: Target,
-      text: string
+      text: string,
+      delivery?: 'dm'
     ): Effect.Effect<Destination, ApiFailure> =>
       Effect.gen(function* () {
         const taskThread = ctx.task.repliesInThread ? ctx.task.task.threadId : undefined
@@ -510,19 +605,33 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
             // their own DM, or the message that started this task. Otherwise the agent is
             // somewhere it was woken — a channel thread it opened to ask a colleague — and the
             // answer belongs in the DM where the person asked for it, not under the colleague's
-            // reply (§9 "come back to me"). With no DM ever opened, here is still better than
-            // nowhere.
-            if (inDm || asked) return { channelId: ctx.channel.id, threadId: taskThread }
+            // reply (§9 "come back to me").
+            if (delivery !== 'dm' && (inDm || asked)) {
+              return { channelId: ctx.channel.id, threadId: taskThread }
+            }
             // The errand's own thread first: it is the exact message that asked, not just the
             // right room. Only when the trail is gone does the DM stand in for it.
             const origin = yield* errandOrigin(ctx, target.id)
-            if (Option.isSome(origin)) return origin.value
-            const home = yield* channels.dmOf(ctx.principal.companyId, target.id, {
-              memberKind: 'agent',
-              memberId: ctx.agent.id
-            })
-            if (Option.isSome(home)) return { channelId: home.value, threadId: undefined }
-            return { channelId: ctx.channel.id, threadId: taskThread }
+            if (
+              delivery !== 'dm' &&
+              Option.isSome(origin) &&
+              (yield* channels.isMember(origin.value.channelId, {
+                memberKind: 'agent',
+                memberId: ctx.agent.id
+              })) &&
+              (yield* channels.isMember(origin.value.channelId, {
+                memberKind: 'user',
+                memberId: target.id
+              }))
+            ) {
+              return origin.value
+            }
+            const home = yield* channels.ensureDm(
+              ctx.principal.companyId,
+              { memberKind: 'user', memberId: target.id },
+              { memberKind: 'agent', memberId: ctx.agent.id }
+            )
+            return { channelId: home, threadId: undefined }
           }
           case 'agent': {
             if (target.agent.id === ctx.agent.id) {
@@ -547,7 +656,8 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
               memberKind: 'agent',
               memberId: target.agent.id
             })
-            if (here) return { channelId: ctx.channel.id, threadId: taskThread }
+            if (here && delivery !== 'dm')
+              return { channelId: ctx.channel.id, threadId: taskThread }
             const direct = yield* channels.ensureDm(
               ctx.principal.companyId,
               { memberKind: 'agent', memberId: ctx.agent.id },
@@ -556,6 +666,12 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
             return { channelId: direct, threadId: undefined }
           }
           case 'channel': {
+            if (delivery === 'dm')
+              return yield* new ApiFailure({
+                status: 422,
+                code: 'validation',
+                message: 'DM delivery requires an @handle, not a #channel'
+              })
             const member = yield* channels.isMember(target.channel.id, {
               memberKind: 'agent',
               memberId: ctx.agent.id
@@ -647,7 +763,8 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
       dest: Destination,
       explicitThread: string | undefined,
       body: string,
-      files: ReadonlyArray<HostFile> = []
+      files: ReadonlyArray<HostFile> = [],
+      component?: MessageComponent
     ): Effect.Effect<Message, ApiFailure> =>
       Effect.gen(function* () {
         const foreign = yield* foreignMention(ctx, body)
@@ -695,7 +812,8 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
             channelId: dest.channelId,
             threadId,
             body,
-            attachments: files
+            attachments: files,
+            component
           })
           .pipe(
             Effect.mapError((e) => {
@@ -782,11 +900,12 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
         const deflected = yield* maybeDeflect(principal, 'send')
         if (deflected !== undefined) return deflected
         const target = yield* resolveTarget(ctx, req.to)
-        const dest = yield* route(ctx, target, req.text)
+        const dest = yield* route(ctx, target, req.text, req.delivery)
         const body = withMention(target.kind === 'channel' ? undefined : target.handle, req.text)
         // Paths are checked before anything is posted: a bad one is a 422 and no message.
         const files = yield* resolveAttachments(ctx, req.attachments)
         const message = yield* post(ctx, dest, req.threadId, body, files)
+        runner.noteSent(principal.taskId, message)
         return {
           posted: true,
           messageId: message.id,
@@ -928,8 +1047,35 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
             message: 'ask a member (@handle), not a channel'
           })
         }
-        const dest = yield* route(ctx, target, req.text)
-        const message = yield* post(ctx, dest, undefined, withMention(target.handle, req.text))
+        if (req.questions !== undefined && target.kind !== 'user')
+          return yield* validation('Interactive questions must be addressed to a human.')
+        if (
+          req.questions !== undefined &&
+          (new Set(req.questions.map((q) => q.id)).size !== req.questions.length ||
+            req.questions.some(
+              (q) => new Set(q.options.map((o) => o.label)).size !== q.options.length
+            ))
+        )
+          return yield* validation('Question IDs and option labels must be unique.')
+        const dest = yield* route(ctx, target, req.text, req.delivery)
+        const component: MessageComponent | undefined =
+          req.questions === undefined || target.kind !== 'user'
+            ? undefined
+            : {
+                kind: 'questions',
+                title: req.text,
+                questions: req.questions,
+                recipientId: target.id,
+                status: 'pending'
+              }
+        const message = yield* post(
+          ctx,
+          dest,
+          undefined,
+          withMention(target.handle, req.text),
+          [],
+          component
+        )
         const id = `ask_${randomUUID()}`
         yield* insertAsk({
           id,
@@ -943,7 +1089,17 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
           messageId: message.id,
           createdAt: nowIso()
         })
-        return { askId: id, messageId: message.id, threadId: message.threadId ?? message.id }
+        const parked = target.kind === 'agent' && message.threadId === ctx.task.task.threadId
+        if (parked) {
+          runner.noteSent(principal.taskId, message)
+          runner.noteWithdraw(principal.taskId)
+        }
+        return {
+          askId: id,
+          messageId: message.id,
+          threadId: message.threadId ?? message.id,
+          ...(parked ? { parked: true } : {})
+        }
       })
 
     const askStatus = (
@@ -1019,7 +1175,7 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
             status: 422,
             code: 'validation',
             message:
-              'summary is empty and you have not reacted to anything this run — either say what you did, or react to the message you are answering with taut_react and call taut_done("") again'
+              'summary is empty and you have not reacted or posted in this thread — contribute with taut_send or taut_react before calling taut_done("")'
           })
         }
         // Files ride on the agent's own reply (the task's streaming message). Resolved and
@@ -1167,6 +1323,37 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
           on,
           reactions: message.reactions.map((r) => ({ emoji: r.emoji, count: r.count }))
         }
+      })
+
+    const deleteMessage = (
+      principal: TokenPrincipal,
+      req: DeleteRequest
+    ): Effect.Effect<DeleteResponse, ApiFailure> =>
+      Effect.gen(function* () {
+        const ctx = yield* context(principal)
+        if (ctx.task.task.agentId !== principal.agentId)
+          return yield* new ApiFailure({
+            status: 403,
+            code: 'forbidden',
+            message: 'Task belongs to another agent'
+          })
+        const messageId = MessageId.make(req.messageId)
+        yield* messages.deleteAsAgent(principal.companyId, principal.agentId, messageId).pipe(
+          Effect.mapError(
+            (error) =>
+              new ApiFailure({
+                status: error._tag === 'NotFound' ? 404 : error._tag === 'Conflict' ? 409 : 403,
+                code:
+                  error._tag === 'NotFound'
+                    ? 'not_found'
+                    : error._tag === 'Conflict'
+                      ? 'conflict'
+                      : 'forbidden',
+                message: error.message
+              })
+          )
+        )
+        return { deleted: true, messageId }
       })
 
     const memory = (principal: TokenPrincipal) =>
@@ -1605,6 +1792,173 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
         }
       })
 
+    /**
+     * D18: the gate `linear_get_issue` and `linear_update_issue` share with
+     * `linear_create_issue`, stated once and in the same words the create path
+     * uses. An agent may not do to a ticket anything the human it is answering
+     * could not do themselves, and a run with nobody behind it may not touch one
+     * at all — a routine that quietly moves tickets is a routine nobody asked for.
+     */
+    const requireLinearHuman = (ctx: Ctx): Effect.Effect<UserId, ApiFailure> =>
+      Effect.gen(function* () {
+        const requestedBy = humanBehind(ctx)
+        if (requestedBy === undefined) {
+          return yield* new ApiFailure({
+            status: 422,
+            code: 'linear_refused',
+            message:
+              'this run has no person behind it, so there is nobody a ticket could belong to. Only a request made in a conversation can change one.'
+          })
+        }
+        const gate = yield* projects
+          .canCreateIssues(ctx.principal.companyId, requestedBy)
+          .pipe(Effect.mapError(() => internal('the Linear mapping could not be read')))
+        return gate.canCreateIssues
+          ? requestedBy
+          : yield* new ApiFailure({
+              status: 422,
+              code: 'linear_refused',
+              message: gate.reason ?? 'you may not change Linear tickets from here'
+            })
+      })
+
+    /** Linear's five priority words, for a ticket mirrored before `priorityLabel` existed. */
+    const PRIORITY_WORDS = ['No priority', 'Urgent', 'High', 'Medium', 'Low'] as const
+
+    /** One mirrored ticket as an agent reads it (D18). */
+    const summarise = (detail: IssueDetail): IssueSummary => {
+      const issue = detail.issue
+      return {
+        identifier: issue.identifier,
+        title: issue.title,
+        ...(issue.description === undefined ? {} : { description: issue.description }),
+        state: issue.state.name,
+        priority: issue.priorityLabel ?? PRIORITY_WORDS[issue.priority] ?? 'No priority',
+        ...(issue.assignee === undefined ? {} : { assignee: issue.assignee.name }),
+        labels: issue.labels.map((label) => label.name),
+        projectId: detail.project.id,
+        projectName: detail.project.name,
+        ...(issue.milestoneName === undefined ? {} : { milestone: issue.milestoneName }),
+        ...(issue.dueDate === undefined ? {} : { dueDate: issue.dueDate }),
+        ...(issue.estimate === undefined ? {} : { estimate: issue.estimate }),
+        ...(issue.parent === undefined ? {} : { parent: issue.parent.identifier }),
+        subIssues: detail.subIssues.map((child) => child.identifier),
+        url: issue.url
+      }
+    }
+
+    /**
+     * The schema already caps this at 0–4; this narrows the *type* to the five the
+     * contract knows, without a cast — an agent's number becomes one of Linear's
+     * levels or the ticket keeps the priority it had.
+     */
+    const asPriority = (value: number): 0 | 1 | 2 | 3 | 4 =>
+      value === 1 ? 1 : value === 2 ? 2 : value === 3 ? 3 : value === 4 ? 4 : 0
+
+    const issueNotFound = (ref: string) =>
+      new ApiFailure({
+        status: 404,
+        code: 'not_found',
+        message: `no ticket ${ref} in this company. Use the identifier as people write it (ENG-4636) or a pis_… id from a Taut link.`
+      })
+
+    /**
+     * D18: read one ticket. Straight out of the mirror — the same rows the humans
+     * on the issue page are looking at — so it costs nothing and works while
+     * Linear is slow.
+     */
+    const linearGetIssue = (
+      principal: TokenPrincipal,
+      req: GetIssueRequest
+    ): Effect.Effect<IssueSummary, ApiFailure> =>
+      Effect.gen(function* () {
+        const ctx = yield* context(principal)
+        yield* requireLinearHuman(ctx)
+        const detail = yield* projects
+          .issueForAgent(principal.companyId, req.ref)
+          .pipe(Effect.mapError(() => issueNotFound(req.ref)))
+        return summarise(detail)
+      })
+
+    /**
+     * D18: change one ticket. `state` arrives as a name because an agent has no way
+     * to know a workflow state's UUID; it is resolved against the team's live
+     * pick-list (D14), and a name the team does not have comes back as the list of
+     * the ones it does — which is the difference between an agent that corrects
+     * itself and one that keeps guessing.
+     */
+    const linearUpdateIssue = (
+      principal: TokenPrincipal,
+      req: UpdateIssueRequest
+    ): Effect.Effect<IssueSummary, ApiFailure> =>
+      Effect.gen(function* () {
+        const ctx = yield* context(principal)
+        yield* requireLinearHuman(ctx)
+        const before = yield* projects
+          .issueForAgent(principal.companyId, req.ref)
+          .pipe(Effect.mapError(() => issueNotFound(req.ref)))
+
+        let stateId: string | undefined = undefined
+        if (req.state !== undefined) {
+          const options = yield* projects
+            .issueOptionsForAgent(principal.companyId, before.project.id)
+            .pipe(
+              Effect.mapError((error) =>
+                error._tag === 'NotFound'
+                  ? issueNotFound(req.ref)
+                  : new ApiFailure({
+                      status: 422,
+                      code: 'linear_refused',
+                      message:
+                        error.issues[0]?.message ?? 'Linear would not say what states this team has'
+                    })
+              )
+            )
+          const wanted = req.state.trim().toLowerCase()
+          const match = options.states.find((state) => state.name.toLowerCase() === wanted)
+          if (match === undefined) {
+            return yield* new ApiFailure({
+              status: 422,
+              code: 'validation',
+              message: `"${req.state}" is not a state on this team. The ones it has: ${options.states.map((state) => state.name).join(', ')}.`
+            })
+          }
+          stateId = match.id
+        }
+
+        const updated = yield* projects
+          .updateIssueForAgent(principal.companyId, req.ref, {
+            ...(req.title === undefined ? {} : { title: req.title }),
+            ...(req.description === undefined ? {} : { description: req.description }),
+            ...(stateId === undefined ? {} : { stateId }),
+            ...(req.priority === undefined ? {} : { priority: asPriority(req.priority) }),
+            // An empty string is how a tool call says "clear it": there is no
+            // `null` an agent can type into a JSON schema field of type string.
+            ...(req.dueDate === undefined
+              ? {}
+              : { dueDate: req.dueDate === '' ? null : req.dueDate }),
+            ...(req.estimate === undefined ? {} : { estimate: req.estimate })
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              error._tag === 'NotFound'
+                ? issueNotFound(req.ref)
+                : new ApiFailure({
+                    status: 422,
+                    code: 'linear_refused',
+                    message: error.issues[0]?.message ?? 'Linear would not take the change'
+                  })
+            )
+          )
+        yield* Effect.logInfo(
+          `linear_update_issue: ${principal.agentId} changed ${updated.identifier}`
+        )
+        const after = yield* projects
+          .issueForAgent(principal.companyId, updated.id)
+          .pipe(Effect.mapError(() => issueNotFound(req.ref)))
+        return summarise(after)
+      })
+
     // ── skills (docs/build-plan-skills.md D7, D8, D12) ───────────────────────
 
     /**
@@ -1871,9 +2225,117 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
         return { cancelled: true }
       })
 
+    const renderComponent = (principal: TokenPrincipal, input: RenderComponentRequest) =>
+      Effect.gen(function* () {
+        const ctx = yield* context(principal)
+        if (ctx.task.task.agentId !== principal.agentId)
+          return yield* validation('Task belongs to another agent.')
+        const dest = {
+          channelId: ctx.task.task.channelId,
+          threadId: ctx.task.repliesInThread ? ctx.task.task.threadId : undefined
+        }
+        let component: MessageComponent
+        if (input.kind === 'timer') {
+          const { signal } = yield* emitSignal(principal, {
+            name: 'timer',
+            note: input.onComplete,
+            deliverIn: `${input.durationSeconds}s`,
+            to: 'self',
+            thread: 'current'
+          })
+          component = {
+            ...input,
+            endsAt: signal.deliverAt,
+            signalId: SignalId.make(signal.signalId)
+          }
+        } else component = input
+        // If posting fails, remove the scheduled wake as well: no invisible timer is left behind.
+        const message = yield* post(ctx, dest, undefined, input.title, [], component).pipe(
+          Effect.tapError(() =>
+            component.kind === 'timer'
+              ? cancelSignal(principal, { signalId: component.signalId }).pipe(Effect.ignore)
+              : Effect.void
+          )
+        )
+        runner.noteSent(principal.taskId, message)
+        return {
+          messageId: message.id,
+          ...(component.kind === 'timer'
+            ? { signalId: component.signalId, endsAt: component.endsAt }
+            : {})
+        }
+      })
+
+    const canvasScope = (principal: TokenPrincipal): Effect.Effect<CanvasScope, ApiFailure> =>
+      Effect.gen(function* () {
+        const ctx = yield* context(principal)
+        if (ctx.task.task.agentId !== principal.agentId)
+          return yield* new ApiFailure({
+            status: 403,
+            code: 'forbidden',
+            message: 'Task belongs to another agent'
+          })
+        return {
+          companyId: principal.companyId,
+          agentId: principal.agentId,
+          channelId: ctx.task.task.channelId,
+          threadId: ctx.task.task.threadId
+        }
+      })
+    const canvasError = (error: { _tag: 'NotFound' | 'Validation'; message: string }) =>
+      new ApiFailure({
+        status: error._tag === 'NotFound' ? 404 : 422,
+        code: error._tag === 'NotFound' ? 'not_found' : 'validation',
+        message: error.message
+      })
+
     return {
+      agentSearch,
+      proposeMandate: (p: TokenPrincipal, input: { mandate: string }) =>
+        authorizations.proposeMandate(p, input.mandate).pipe(
+          Effect.map((message) => ({ message })),
+          Effect.mapError(
+            (error) =>
+              new ApiFailure({
+                status: error._tag === 'Forbidden' ? 403 : error._tag === 'NotFound' ? 404 : 422,
+                code:
+                  error._tag === 'Forbidden'
+                    ? 'forbidden'
+                    : error._tag === 'NotFound'
+                      ? 'not_found'
+                      : 'validation',
+                message: error.message
+              })
+          )
+        ),
+      canvasCreate: (p: TokenPrincipal, input: { title: string; html: string; open?: boolean }) =>
+        canvasScope(p).pipe(
+          Effect.flatMap((scope) =>
+            canvases.create(scope, input).pipe(Effect.mapError(canvasError))
+          ),
+          Effect.map((canvas) => ({ canvas }))
+        ),
+      canvasChange: (
+        p: TokenPrincipal,
+        id: string,
+        action: 'update' | 'open' | 'close',
+        input: { title?: string; html?: string } = {}
+      ) =>
+        canvasScope(p).pipe(
+          Effect.flatMap((scope) =>
+            canvases.change(scope, id, action, input).pipe(Effect.mapError(canvasError))
+          ),
+          Effect.map((canvas) => ({ canvas }))
+        ),
+      canvasList: (p: TokenPrincipal) =>
+        canvasScope(p).pipe(
+          Effect.flatMap(canvases.listOwn),
+          Effect.map((items) => ({ items }))
+        ),
       send,
+      delete: deleteMessage,
       inbox,
+      renderComponent,
       ask,
       askStatus,
       done,
@@ -1895,6 +2357,8 @@ export class AgentApi extends Effect.Service<AgentApi>()('AgentApi', {
       githubOpenPr,
       linearProjects,
       linearCreateIssue,
+      linearGetIssue,
+      linearUpdateIssue,
       emitSignal,
       listSignals,
       cancelSignal

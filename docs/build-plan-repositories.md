@@ -199,6 +199,11 @@ CREATE INDEX idx_agent_repos_repository ON agent_repos(repository_id);
 2. Web renders a real `<form method="POST" action={postUrl}>` with one hidden input `manifest`
    holding the JSON, and submits it. GitHub shows its create-app page; the owner names it and clicks
    Create.
+   In desktop, open the returned `browserUrl` in the OS browser instead: Electron's external
+   navigation drops POST bodies. `GET /api/repositories/github/start?token=…` redeems a one-use,
+   ten-minute handoff and serves the auto-submitting form without requiring browser cookies.
+   The handoff does not consume GitHub's callback state. The desktop button remains available
+   for retry while the owner continues in the browser.
 3. GitHub redirects to the callback with `?code=…&state=…`. Server verifies `state`, then
    `POST https://api.github.com/app-manifests/{code}/conversions` → `{ id, slug, client_id,
 client_secret, pem, webhook_secret }`. Encrypt and insert `github_apps`. Redirect the browser to

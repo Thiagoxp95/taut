@@ -30,6 +30,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   fake.requests.length = 0
+  fake.parkAsks = false
   fake.answerAsks = false
   fake.failNext = undefined
 })
@@ -50,6 +51,17 @@ const call = async (name: string, args: Record<string, unknown>) => {
 }
 
 describe('MCP server', () => {
+  it('searches for a specialist with task authentication and returns capability summaries', async () => {
+    const r = await call('taut_agent_search', { query: 'production SQL', limit: 5 })
+    expect(r.isError).toBeFalsy()
+    expect(last()).toMatchObject({
+      method: 'POST',
+      path: '/api/agent-runtime/agents/search',
+      authorization: `Bearer ${fake.token}`,
+      body: { query: 'production SQL', limit: 5 }
+    })
+    expect(r.structuredContent).toMatchObject({ agents: [{ handle: 'database' }], hasMore: false })
+  })
   it('lists every tool with a valid JSON-schema object input', async () => {
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...ToolNames].sort())
@@ -162,6 +174,13 @@ describe('MCP server', () => {
       expect(p.path).toBe('/api/agent-runtime/ask/ask_1')
       expect(Number(p.query['wait'])).toBeLessThanOrEqual(1000)
     }
+  })
+
+  it('taut_ask yields immediately when its teammate must wait for this turn to end', async () => {
+    fake.parkAsks = true
+    const r = await call('taut_ask', { to: '@peer', text: 'A or B?', timeoutSec: 1 })
+    expect(r.structuredContent).toMatchObject({ parked: true, askId: 'ask_1' })
+    expect(fake.requests.map((r) => r.method)).toEqual(['POST'])
   })
 
   it('taut_ask returns the answer when it arrives', async () => {

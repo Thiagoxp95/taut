@@ -5,7 +5,7 @@ import {
   KeyRoundIcon,
   SquareKanbanIcon,
   UsersIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import { SettingsNav, SettingsNavLink } from '@/components/settings'
 
 /**
@@ -28,7 +28,7 @@ export function WorkspaceSettingsNav() {
         Members
       </SettingsNavLink>
       <SettingsNavLink to="/subscriptions" icon={<CreditCardIcon />}>
-        Subscriptions
+        Providers
       </SettingsNavLink>
       <SettingsNavLink to="/vault" icon={<KeyRoundIcon />}>
         Vault

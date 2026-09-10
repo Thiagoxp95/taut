@@ -7,8 +7,7 @@
 # there in this image survives — keep state out of it.
 #
 # Build: pnpm --filter @taut/runtime build:image
-#   (builds @taut/taut-mcp, copies its dist/mcp.js into ./docker, then runs)
-#   docker build -f docker/agent.Dockerfile -t taut/agent:latest docker
+#   docker build -f packages/runtime/docker/agent.Dockerfile -t taut/agent:latest .
 #
 # Contents besides the runtimes:
 # - /opt/taut/mcp.js       the bundled `taut` MCP server (`node /opt/taut/mcp.js`,
@@ -28,6 +27,17 @@
 # cursor-agent is intentionally absent: its installer is a curl|bash script that
 # unpacks into $HOME, which is hidden by the bind mount. Add it to the agent home
 # instead if you need it (docs/research/agent-sandboxes.md §5).
+
+# Build from the repository root; no generated files or host pnpm installation needed.
+FROM node:22-bookworm-slim AS mcp-build
+ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH CI=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable
+WORKDIR /repo
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+RUN pnpm fetch
+COPY . .
+RUN pnpm install --frozen-lockfile --offline --filter '@taut/taut-mcp...' \
+ && pnpm --filter @taut/taut-mcp build
 
 FROM node:22-bookworm-slim
 
@@ -72,8 +82,8 @@ RUN set -eux; \
   playwright-mcp --version
 
 # The bundled taut MCP server and CLI (copied into the build context by `build:image`).
-COPY mcp.js /opt/taut/mcp.js
-COPY cli.js /opt/taut/cli.js
+COPY --from=mcp-build /repo/packages/taut-mcp/dist/mcp.js /opt/taut/mcp.js
+COPY --from=mcp-build /repo/packages/taut-mcp/dist/cli.js /opt/taut/cli.js
 RUN chmod 0644 /opt/taut/mcp.js /opt/taut/cli.js \
  && node --check /opt/taut/mcp.js \
  && node --check /opt/taut/cli.js \

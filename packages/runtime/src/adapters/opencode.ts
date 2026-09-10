@@ -93,7 +93,7 @@ export const buildOpencodeCommand = (input: BuildCommandInput): BuiltCommand => 
 }
 
 /**
- * Observed shapes: `{type:"text",sessionID,part:{text}}`,
+ * Observed shapes: `{type:"text",sessionID,part:{text}}`, `{type:"reasoning",part:{text}}`,
  * `{type:"tool_use",part:{id,tool,state:{status,input,output,error}}}`,
  * `{type:"step_start"}`, `{type:"step_finish",part:{tokens:{input,output,cache:{read,write}},cost}}`,
  * `{type:"error",error:{name,data:{message}}}`.
@@ -112,7 +112,11 @@ export const parseOpencodeLine = (line: string): ReadonlyArray<AgentEvent> => {
       const text = str(part['text']) ?? str(json['text'])
       return text === undefined || text.length === 0
         ? []
-        : withSession([{ type: 'text_delta', text }])
+        : withSession([{ type: 'text_delta', text, ...opt('messageId', str(part['messageID'])) }])
+    }
+    case 'reasoning': {
+      const text = str(part['text']) ?? str(json['text'])
+      return text === undefined || text.length === 0 ? [] : [{ type: 'thinking', text }]
     }
     case 'tool_use':
     case 'tool': {

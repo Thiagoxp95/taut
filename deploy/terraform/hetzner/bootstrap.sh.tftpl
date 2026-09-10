@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+umask 077
+
+# Serialized and repeatable: retry a failed bootstrap without regenerating keys.
+exec 9>/run/taut-bootstrap.lock
+flock -n 9 || { echo 'Another bootstrap is running'; exit 1; }
+exec > >(tee -a /var/log/taut-bootstrap.log) 2>&1
+trap 'echo "Bootstrap failed at line $LINENO; inspect /var/log/taut-bootstrap.log"' ERR
+
+apt-get update
+apt-get install -y ca-certificates curl gnupg git debian-keyring debian-archive-keyring apt-transport-https
+install -m 0755 -d /etc/apt/keyrings
+curl --retry 5 -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+curl --retry 5 -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --batch --yes --dearmor -o /etc/apt/keyrings/nodesource.gpg
+curl --retry 5 -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl --retry 5 -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o /etc/apt/sources.list.d/caddy-stable.list
+cat > /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: noble
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+printf '%s\n' 'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main' > /etc/apt/sources.list.d/nodesource.list
+chmod 0644 /etc/apt/keyrings/docker.asc /etc/apt/keyrings/nodesource.gpg /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/{docker.sources,nodesource.list,caddy-stable.list}
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin nodejs caddy
+systemctl enable --now docker
+
+if [ ! -d /opt/taut-source/.git ]; then
+  git init /opt/taut-source
+  git -C /opt/taut-source remote add origin '${repository_url}'
+fi
+git -C /opt/taut-source fetch --depth 1 origin '${revision}'
+git -C /opt/taut-source checkout --detach '${revision}'
+test "$(git -C /opt/taut-source rev-parse HEAD)" = '${revision}'
+%{ if calls_domain != null ~}
+taut_public_ipv4=$(curl --retry 5 --connect-timeout 5 --max-time 30 -fsS http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
+node /opt/taut-source/scripts/self-host.mjs init /opt/taut-instance --port 3080 --url 'https://${domain}' --calls --calls-url 'wss://${calls_domain}' --turn-host '${calls_domain}' --turn-ip "$taut_public_ipv4"
+%{ else ~}
+node /opt/taut-source/scripts/self-host.mjs init /opt/taut-instance --port 3080 --url 'https://${domain}'
+%{ endif ~}
+node /opt/taut-source/scripts/self-host.mjs up /opt/taut-instance
+
+cat > /etc/caddy/Caddyfile <<'EOF'
+${domain} {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:3080
+}
+%{ if calls_domain != null ~}
+${calls_domain} {
+    reverse_proxy 127.0.0.1:7880
+}
+%{ endif ~}
+EOF
+chmod 0644 /etc/caddy/Caddyfile
+caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+systemctl enable --now caddy
+systemctl reload caddy
+curl --fail --silent --show-error http://127.0.0.1:3080/api/health
+printf '%s\n' '${revision}' > /opt/taut-instance/deployed-revision
+echo 'Taut bootstrap complete. Point DNS at this host, then verify https://${domain}/api/health.'

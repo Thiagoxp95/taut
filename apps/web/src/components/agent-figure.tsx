@@ -85,6 +85,7 @@ interface Figure {
   dark: boolean
   still: boolean
   working: boolean
+  contextPercentage: number
 }
 
 /**
@@ -104,6 +105,10 @@ function createEngine(canvas: HTMLCanvasElement) {
   let visible = true
   let unsubscribe: (() => void) | undefined
   let sized = 0
+  let fullness = 0
+  let fillFrom = 0
+  let fillTo = 0
+  let fillStartedAt = 0
 
   function draw(now: number): boolean {
     if (ctx === null || figure === undefined) return false
@@ -120,6 +125,12 @@ function createEngine(canvas: HTMLCanvasElement) {
     ctx.clearRect(0, 0, px, px)
 
     let travelling = false
+    if (fullness !== fillTo) {
+      const k = clamp01((now - fillStartedAt) / MORPH_MS)
+      fullness = fillFrom + (fillTo - fillFrom) * easeInOut(k)
+      if (k === 1) fullness = fillTo
+      else travelling = true
+    }
     if (duration > 0) {
       const k = clamp01((now - startedAt) / duration)
       u = from + (to - from) * k
@@ -137,8 +148,8 @@ function createEngine(canvas: HTMLCanvasElement) {
     const faceAlpha = u <= 0.001 ? 1 : 1 - smoothstep(0.06, 0.4, u)
 
     if (u <= 0.001) {
-      drawBlobFace(ctx, blobFace(seed, shape, px), px, still ? 0 : now, still ? 0 : 1)
-      return travelling || !still
+      drawBlobFace(ctx, blobFace(seed, shape, px), px, still ? 0 : now, still ? 0 : 1, fullness)
+      return travelling || (!still && fullness < 1)
     }
     if (u >= 0.999) {
       ctx.drawImage(orbBitmap(orb, preset, head, dark, t), 0, 0, px, px)
@@ -149,12 +160,19 @@ function createEngine(canvas: HTMLCanvasElement) {
 
     if (faceAlpha > 0.004) {
       ctx.globalAlpha = faceAlpha
-      drawBlobFace(ctx, blobFace(seed, shape, px), px, still ? 0 : now, still ? 0 : faceAlpha)
+      drawBlobFace(
+        ctx,
+        blobFace(seed, shape, px),
+        px,
+        still ? 0 : now,
+        still ? 0 : faceAlpha,
+        fullness
+      )
     }
 
     const dustAlpha = smoothstep(0, 0.14, u) * (1 - smoothstep(0.78, 1, u))
     if (dustAlpha > 0.004) {
-      const dust = blobParticles(seed, shape, preset)
+      const dust = blobParticles(seed, shape, preset, figure.working ? fullness : fillTo)
       ctx.globalAlpha = dustAlpha
       let i = 0
       for (const run of dust.runs) {
@@ -215,6 +233,16 @@ function createEngine(canvas: HTMLCanvasElement) {
     update(next: Figure): void {
       const was = figure
       figure = next
+      const nextFill = Number.isFinite(next.contextPercentage)
+        ? clamp01(next.contextPercentage / 100)
+        : 0
+      if (was === undefined || next.still || was.seed !== next.seed || was.shape !== next.shape) {
+        fullness = fillFrom = fillTo = nextFill
+      } else if (nextFill !== fillTo) {
+        fillFrom = fullness
+        fillTo = nextFill
+        fillStartedAt = performance.now()
+      }
       if (next.still) {
         u = next.working ? 1 : 0
         to = u
@@ -255,6 +283,7 @@ export function AgentFigure({
   shape,
   state = 'working',
   working,
+  contextPercentage = 0,
   px,
   className
 }: {
@@ -264,6 +293,8 @@ export function AgentFigure({
   state?: OrbState
   /** `true` while the agent is busy. Flipping it runs the morph. */
   working: boolean
+  /** Context occupancy, 0–100. At capacity the face is a solid circle. */
+  contextPercentage?: number
   /** Rendered size in CSS pixels. */
   px: number
   className?: string
@@ -295,9 +326,10 @@ export function AgentFigure({
       head,
       dark,
       still,
+      contextPercentage,
       working
     })
-  }, [seed, shape, state, px, head, dark, still, working])
+  }, [seed, shape, state, px, head, dark, still, working, contextPercentage])
 
   return (
     <canvas

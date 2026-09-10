@@ -1,5 +1,5 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
-import { BotIcon, CreditCardIcon, PlusIcon } from 'lucide-react'
+import { BotIcon, CreditCardIcon, PlusIcon } from '@taut/ui/components/icons'
 import type { Agent } from '@taut/contract'
 import { Badge } from '@taut/ui/components/badge'
 import { Button } from '@taut/ui/components/button'
@@ -35,7 +35,13 @@ function AgentCard({ agent }: { agent: Agent }) {
       className="group flex flex-col gap-3 rounded-xl border bg-card p-4 text-card-foreground transition-colors outline-none hover:border-ring/50 hover:bg-accent/40 focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <div className="flex items-start gap-3">
-        <EntityAvatar kind="agent" face={agentFace(agent, shapes)} name={agent.name} size="lg" />
+        <EntityAvatar
+          memberId={agent.id}
+          kind="agent"
+          face={agentFace(agent, shapes)}
+          name={agent.name}
+          size="lg"
+        />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold">
             {agent.name} <span className="font-normal text-muted-foreground">@{agent.handle}</span>
@@ -124,7 +130,7 @@ function AgentsRoute() {
         ) : null}
 
         {query.isPending ? (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-3 @xl/page:grid-cols-2 @4xl/page:grid-cols-3">
             {[0, 1, 2].map((row) => (
               <Skeleton key={row} className="h-36 rounded-xl" />
             ))}
@@ -141,7 +147,7 @@ function AgentsRoute() {
             }
           />
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-3 @xl/page:grid-cols-2 @4xl/page:grid-cols-3">
             {agents.map((agent) => (
               <AgentCard key={agent.id} agent={agent} />
             ))}

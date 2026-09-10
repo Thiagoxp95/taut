@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Loader2Icon } from 'lucide-react'
+import { Loader2Icon } from '@taut/ui/components/icons'
 import type { ModelOption, RuntimeKind, SubscriptionId } from '@taut/contract'
 import { cn } from '@taut/ui/lib/utils'
 import {

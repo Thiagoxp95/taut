@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { CheckIcon, ForwardIcon, HashIcon, Loader2Icon } from 'lucide-react'
+import { CheckIcon, ForwardIcon, HashIcon, Loader2Icon } from '@taut/ui/components/icons'
 import type { Channel, Message } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 import {
@@ -137,6 +137,8 @@ export function ForwardDialog({
                   onSelect={() => setTarget(view.channel)}
                 >
                   <EntityAvatar
+                    onProfileNavigate={() => onOpenChange(false)}
+                    memberId={view.partner?.id}
                     avatar={view.partner?.avatar ?? { kind: 'emoji', value: '💬' }}
                     kind={view.partner?.kind ?? 'user'}
                     face={view.partner?.face}

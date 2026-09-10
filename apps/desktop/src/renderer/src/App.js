@@ -1,6 +1,6 @@
 import { jsx as _jsx, jsxs as _jsxs } from 'react/jsx-runtime'
 import { useEffect, useState } from 'react'
-import { Loader2, PlugZap } from 'lucide-react'
+import { Loader2, PlugZap } from '@taut/ui/components/icons'
 import { Button } from '@taut/ui/components/button'
 import { Input } from '@taut/ui/components/input'
 import { Label } from '@taut/ui/components/label'

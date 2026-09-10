@@ -54,6 +54,53 @@ export const ProjectsLive = HttpApiBuilder.group(ServerApi, 'projects', (handler
         return yield* projects.linkLinearUser(yield* CurrentUser, path.linearUserId, payload.member)
       })
     )
+    /**
+     * One ticket and everything hanging off it (docs/build-plan-issues.md). Thin
+     * exactly like the rest of this file: which ref resolves, who may write, what
+     * a thread is and when Linear is called all live in the service.
+     */
+    .handle('issue', ({ path }) =>
+      Effect.gen(function* () {
+        const projects = yield* Projects
+        return yield* projects.issue(yield* CurrentUser, path.issueId)
+      })
+    )
+    .handle('issueActivity', ({ path }) =>
+      Effect.gen(function* () {
+        const projects = yield* Projects
+        return yield* projects.issueActivity(yield* CurrentUser, path.issueId)
+      })
+    )
+    .handle('updateIssue', ({ path, payload }) =>
+      Effect.gen(function* () {
+        const projects = yield* Projects
+        return yield* projects.updateIssue(yield* CurrentUser, path.issueId, payload)
+      })
+    )
+    .handle('deleteIssue', ({ path }) =>
+      Effect.gen(function* () {
+        const projects = yield* Projects
+        yield* projects.deleteIssue(yield* CurrentUser, path.issueId)
+      })
+    )
+    .handle('openIssueThread', ({ path, payload }) =>
+      Effect.gen(function* () {
+        const projects = yield* Projects
+        return yield* projects.openIssueThread(yield* CurrentUser, path.issueId, payload.body)
+      })
+    )
+    .handle('issueOptions', ({ path }) =>
+      Effect.gen(function* () {
+        const projects = yield* Projects
+        return yield* projects.issueOptions(yield* CurrentUser, path.projectId)
+      })
+    )
+    .handle('createIssue', ({ path, payload }) =>
+      Effect.gen(function* () {
+        const projects = yield* Projects
+        return yield* projects.fileIssue(yield* CurrentUser, path.projectId, payload)
+      })
+    )
     .handle('list', () =>
       Effect.gen(function* () {
         const projects = yield* Projects

@@ -3,7 +3,7 @@ import { Outlet, createFileRoute } from '@tanstack/react-router'
 /** Centred card layout for login, signup, invites and onboarding. */
 function AuthLayout() {
   return (
-    <div className="taut-shell flex h-full flex-col items-center justify-center bg-muted/40 px-4 py-10">
+    <div className="taut-shell flex min-h-dvh flex-col items-center justify-center bg-muted/40 px-4 py-10">
       <div className="mb-6 flex items-center gap-2">
         <span aria-hidden className="text-2xl">
           🧵

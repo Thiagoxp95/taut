@@ -1,3 +1,4 @@
+import { Authorizations } from './services/authorizations.js'
 import { NodeContext } from '@effect/platform-node'
 import type { MachineProviderTag } from '@taut/runtime'
 import { Effect, Layer } from 'effect'
@@ -29,11 +30,13 @@ import { WsServer } from './realtime/ws.js'
 import { Agents } from './services/agents.js'
 import { Attachments } from './services/attachments.js'
 import { Auth } from './services/auth.js'
+import { Canvases } from './services/canvases.js'
 import { Calls } from './services/calls.js'
 import { Channels } from './services/channels.js'
 import { Companies } from './services/companies.js'
 import { Departments } from './services/departments.js'
 import { Handovers } from './services/handovers.js'
+import { IssueCommentPush } from './services/issueComments.js'
 import { AgentHomes } from './services/homes.js'
 import { Invites } from './services/invites.js'
 import { Messages } from './services/messages.js'
@@ -80,7 +83,7 @@ import { Workspace } from './services/workspace.js'
  *   · Projects                                                        (domain, tier 1b)
  *       │
  *   Invites · Departments · Messages · Subscriptions · Agents
- *   · PushNotifier (bus → web push)                                   (domain, tier 2)
+ *   · PushNotifier (bus → web push) · IssueCommentPush (bus → Linear comment)  (domain, tier 2)
  *       │
  *   Handovers · Routines (rows only; the runner fires them) · Signals · Calls  (domain, tier 3)
  *   · HttpNodeServer                                                   (= InfraLive)
@@ -124,6 +127,7 @@ const DomainTier1 = Layer.mergeAll(
 
 /** Between the tiers: needs `Channels` (D8 authorization); `Messages` and `Agents` need it. */
 const DomainTier1b = Layer.mergeAll(
+  Canvases.Default,
   Attachments.Default,
   Reactions.Default,
   Repositories.Default,
@@ -139,7 +143,14 @@ const DomainTier2 = Layer.mergeAll(
   Messages.Default,
   Subscriptions.Default,
   Agents.Default,
-  PushNotifier.Default
+  PushNotifier.Default,
+  /**
+   * Replies on an issue thread, out to Linear as comments
+   * (docs/build-plan-issues.md D11). A bus subscriber like `PushNotifier` beside
+   * it, and here rather than a tier lower only because it is the same kind of
+   * thing: it needs `Projects` (tier 1b) and the bus, and nothing needs it.
+   */
+  IssueCommentPush.Default
 ).pipe(
   Layer.provideMerge(DomainTier1b),
   Layer.provideMerge(DbLive),
@@ -149,6 +160,7 @@ const DomainTier2 = Layer.mergeAll(
 
 /** Domain services + realtime + db + config: everything the HTTP handlers and `/ws` need. */
 export const ServicesLive = Layer.mergeAll(
+  Authorizations.Default,
   Handovers.Default,
   Routines.Default,
   /** Signal rows and their budgets; `agents/signalRunner.ts` delivers them (Part II, D19). */

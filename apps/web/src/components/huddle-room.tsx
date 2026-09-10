@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { HeadphonesIcon, MessagesSquareIcon } from 'lucide-react'
+import { HeadphonesIcon, MessagesSquareIcon } from '@taut/ui/components/icons'
 import type { Call } from '@taut/contract'
 import { cn } from '@taut/ui/lib/utils'
 
@@ -92,21 +92,30 @@ export function HuddleRoomPanel({ layout }: { layout: 'inline' | 'window' }) {
   return (
     <div
       className={cn(
-        'flex min-h-0 shrink-0 flex-col bg-background',
-        standalone ? 'flex-1 shrink' : 'h-[min(42vh,360px)] border-t'
+        '@container/huddle flex min-h-0 min-w-0 shrink-0 flex-col bg-background',
+        standalone ? 'flex-1 shrink' : 'h-[min(60dvh,28rem)] border-t lg:h-[min(42dvh,360px)]'
       )}
     >
-      <div className={cn('flex min-h-0 flex-1', standalone ? 'flex-col' : 'flex-row')}>
+      <div
+        className={cn(
+          'flex min-h-0 min-w-0 flex-1 flex-col',
+          !standalone && '@3xl/huddle:flex-row'
+        )}
+      >
         <HuddleTiles
           className={cn(
             'min-h-0 border-t-0',
-            standalone ? 'h-auto max-h-[45%] shrink' : 'h-auto flex-1'
+            standalone
+              ? 'h-auto max-h-[45%] shrink'
+              : 'h-auto max-h-[30%] shrink @3xl/huddle:max-h-none @3xl/huddle:flex-1'
           )}
         />
         <div
           className={cn(
-            'flex min-h-0 flex-1 flex-col',
-            standalone ? 'border-t' : 'w-[24rem] shrink-0 border-l'
+            'flex min-h-0 min-w-0 flex-1 flex-col',
+            standalone
+              ? 'border-t'
+              : 'w-full border-t @3xl/huddle:w-[24rem] @3xl/huddle:shrink-0 @3xl/huddle:border-t-0 @3xl/huddle:border-l'
           )}
         >
           {standalone ? null : (

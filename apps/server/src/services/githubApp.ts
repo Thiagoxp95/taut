@@ -178,6 +178,10 @@ export class GitHubApp extends Effect.Service<GitHubApp>()('GitHubApp', {
 
     /** Nonces already spent, with the moment they stop mattering. Single process, in memory. */
     const spentStates = yield* Ref.make(new Map<string, number>())
+    /** One-use browser handoffs, separate from the state GitHub must return. */
+    const browserHandoffs = yield* Ref.make(
+      new Map<string, { readonly manifest: GithubManifest; readonly expiresAt: number }>()
+    )
     /** `(companyId, repositoryId, mode)` → token, dropped `TOKEN_SKEW_MS` before it expires. */
     const tokenCache = yield* Ref.make(
       new Map<string, { readonly token: string; readonly expiresAt: string }>()
@@ -469,12 +473,45 @@ export class GitHubApp extends Effect.Service<GitHubApp>()('GitHubApp', {
           },
           default_events: [] as ReadonlyArray<string>
         }
-        return {
+        const token = randomBytes(32).toString('base64url')
+        const result: GithubManifest = {
           postUrl: `${GITHUB_WEB}/settings/apps/new?state=${encodeURIComponent(state)}`,
           manifest: JSON.stringify(body),
-          state
+          state,
+          browserUrl: `${base}/api/repositories/github/start?token=${token}`
         }
+        yield* Ref.update(browserHandoffs, (map) => {
+          const next = new Map(map)
+          for (const [key, value] of next) if (value.expiresAt <= Date.now()) next.delete(key)
+          // Bound abandoned handoffs, including manifests submitted directly by web clients.
+          if (next.size >= 1000) {
+            const oldest = next.keys().next().value
+            if (oldest !== undefined) next.delete(oldest)
+          }
+          next.set(token, { manifest: result, expiresAt: Date.now() + STATE_TTL_MS })
+          return next
+        })
+        return result
       })
+
+    const takeBrowserManifest = (token: string): Effect.Effect<GithubManifest, GithubFailure> =>
+      Ref.modify(browserHandoffs, (map) => {
+        const entry = map.get(token)
+        const next = new Map(map)
+        next.delete(token)
+        return [entry, next] as const
+      }).pipe(
+        Effect.flatMap((entry) =>
+          entry !== undefined && entry.expiresAt > Date.now()
+            ? Effect.succeed(entry.manifest)
+            : Effect.fail(
+                new GithubFailure({
+                  reason:
+                    'This GitHub link is invalid or has expired. Return to Taut and connect again.'
+                })
+              )
+        )
+      )
 
     /**
      * Step 3: trade the one-time `code` for the App and store it. The response is
@@ -702,6 +739,7 @@ export class GitHubApp extends Effect.Service<GitHubApp>()('GitHubApp', {
       signState,
       consumeState,
       manifest,
+      takeBrowserManifest,
       convertManifest,
       recordInstallation,
       connection,

@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { Link, Outlet, createRootRouteWithContext } from '@tanstack/react-router'
-import { CompassIcon } from 'lucide-react'
+import { CompassIcon } from '@taut/ui/components/icons'
 import { Button } from '@taut/ui/components/button'
 import { Toaster } from '@taut/ui/components/sonner'
 import { TooltipProvider } from '@taut/ui/components/tooltip'

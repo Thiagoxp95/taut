@@ -1,4 +1,5 @@
 import { SqlClient } from '@effect/sql'
+import { SqliteClient } from '@effect/sql-sqlite-node'
 import { it } from '@effect/vitest'
 import { CompanyId } from '@taut/contract/ids'
 import { Chunk, Effect, Layer, Schema, Stream } from 'effect'
@@ -6,10 +7,12 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, describe, expect } from 'vitest'
 import backfillMessageSeq from '../src/db/migrations/0006_backfill_message_seq.js'
+import retainTaskHistory from '../src/db/migrations/0034_retain_task_history.js'
 import { EventLog } from '../src/realtime/eventLog.js'
 import { makeTempDir, removeDir, testDb } from './_harness.js'
 
 const EXPECTED_TABLES = [
+  'agent_connectors',
   'agent_file_grants',
   'agent_repos',
   'agent_sessions',
@@ -21,6 +24,7 @@ const EXPECTED_TABLES = [
   'audit_log',
   'call_participants',
   'calls',
+  'canvases',
   'channel_members',
   'channels',
   'companies',
@@ -46,6 +50,7 @@ const EXPECTED_TABLES = [
   'messages_fts_prefix_docsize',
   'messages_fts_prefix_idx',
   'notifications',
+  'project_issue_comments',
   'project_issues',
   'project_milestones',
   'projects',
@@ -89,12 +94,36 @@ const dir = makeTempDir()
 afterAll(() => removeDir(dir))
 
 describe('migrations', () => {
+  it.scoped(
+    '0034 preserves populated task history and pending asks when a reply is withdrawn',
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`PRAGMA foreign_keys = ON`
+        yield* sql`CREATE TABLE messages (id TEXT PRIMARY KEY)`
+        yield* sql`CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE)`
+        yield* sql`CREATE TABLE asks (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE)`
+        yield* sql`INSERT INTO messages VALUES ('reply1'), ('reply2')`
+        yield* sql`INSERT INTO tasks VALUES ('task1', 'done', 'reply1'), ('task2', 'queued', 'reply2')`
+        yield* sql`INSERT INTO asks VALUES ('ask1', 'task1')`
+        yield* sql.withTransaction(retainTaskHistory)
+        yield* sql`DELETE FROM messages WHERE id = 'reply1'`
+        expect(yield* sql`SELECT id, status, message_id FROM tasks ORDER BY id`).toEqual([
+          { id: 'task1', status: 'done', message_id: 'reply1' },
+          { id: 'task2', status: 'queued', message_id: 'reply2' }
+        ])
+        expect(yield* sql`SELECT * FROM asks`).toEqual([{ id: 'ask1', task_id: 'task1' }])
+        expect(yield* sql`PRAGMA foreign_key_check`).toEqual([])
+        yield* sql`DELETE FROM tasks WHERE id = 'task1'`
+        expect(yield* sql`SELECT * FROM asks`).toEqual([])
+      }).pipe(Effect.provide(SqliteClient.layer({ filename: ':memory:' })))
+  )
   it.scoped('create every domain table on a fresh database with the right pragmas', () =>
     Effect.gen(function* () {
       const result = yield* inspect.pipe(Effect.provide(testDb(dir)))
       expect(existsSync(join(dir, 'taut.db'))).toBe(true)
       expect(result.tables).toEqual(EXPECTED_TABLES)
-      expect(result.applied).toBe(32)
+      expect(result.applied).toBe(38)
       expect(result.foreignKeys).toBe(1)
       expect(result.journalMode).toBe('wal')
       expect(result.busyTimeout).toBe(5000)
@@ -104,7 +133,7 @@ describe('migrations', () => {
   it.scoped('are idempotent: a second boot on the same file applies nothing', () =>
     Effect.gen(function* () {
       const result = yield* inspect.pipe(Effect.provide(testDb(dir)))
-      expect(result.applied).toBe(32)
+      expect(result.applied).toBe(38)
       expect(result.tables).toEqual(EXPECTED_TABLES)
     })
   )

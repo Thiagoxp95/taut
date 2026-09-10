@@ -22,6 +22,20 @@ const contexts = (
   events.filter((e): e is Extract<AgentEvent, { type: 'context' }> => e.type === 'context')
 
 describe('claude-code context samples', () => {
+  it('reports compaction while it is running, and clears it at the boundary', () => {
+    const parse = (value: unknown) => parseClaudeLine(JSON.stringify(value))
+    expect(parse({ type: 'system', subtype: 'status', status: 'compacting' })).toEqual([
+      { type: 'compaction', compacting: true }
+    ])
+    expect(parse({ type: 'system', subtype: 'status', status: null })).toEqual([
+      { type: 'compaction', compacting: false }
+    ])
+    expect(parse({ type: 'system', subtype: 'compact_boundary' })).toEqual([
+      { type: 'compaction', compacting: false }
+    ])
+    expect(parse({ type: 'system', subtype: 'status', status: 'unknown' })).toEqual([])
+  })
+
   /**
    * A real cached turn: 3 fresh input tokens, 90k served from cache. Anything that reports 3
    * here has confused "tokens I was charged fresh for" with "tokens in the window".

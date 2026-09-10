@@ -24,6 +24,13 @@ beforeEach(() => {
 const run = (argv: ReadonlyArray<string>, stdin?: string) => runtime.runPromise(runCli(argv, stdin))
 
 describe('parseArgs', () => {
+  it('lists teammates or searches their capabilities with a bounded result size', async () => {
+    const result = await run(['agents', 'production', 'SQL', '--limit', '5', '--json'])
+    expect(result.exitCode).toBe(0)
+    expect(JSON.parse(result.stdout)).toMatchObject({ agents: [{ handle: 'database' }] })
+    expect(fake.requests.at(-1)).toMatchObject({ body: { query: 'production SQL', limit: 5 } })
+    expect(parseArgs(['agents'])).toMatchObject({ tool: 'taut_agent_search', input: {} })
+  })
   it('maps every command to a tool + input', () => {
     expect(parseArgs(['send', '@bruno', 'hello', 'there', '--thread', 'msg_1'])).toEqual({
       _tag: 'tool',

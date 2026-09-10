@@ -6,7 +6,7 @@
  * say "never mind", which is half of what a reminder is for. That is one muted row under the
  * thread composer, not a tab.
  */
-import { AlarmClockIcon } from 'lucide-react'
+import { AlarmClockIcon } from '@taut/ui/components/icons'
 import type { MessageId } from '@taut/contract'
 import { useCancelSignal, useSignals } from '@/lib/api'
 import { formatTime } from '@/lib/format'

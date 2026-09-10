@@ -31,6 +31,7 @@ import {
   useMembers,
   type PageOf
 } from '@/lib/api'
+import type { MessageAuthor } from '@/components/message-bubble'
 import { agentFace, departmentShapes, type AgentFace } from '@/lib/agent-avatar'
 import { call } from '@/lib/api-client'
 import { handleFromEmail } from '@/lib/format'
@@ -189,6 +190,13 @@ export function useChannelMentionables(channelId: ChannelId | undefined): readon
  * name can still be *written*: telling an agent in a DM to go talk to
  * `@bruno` in `#engineering` is naming him, not pinging him, and a picker
  * limited to the DM's two members made that impossible to type.
+ *
+ * With no channel at all, everyone is `here`. The one box that composes without
+ * one is the ticket composer before anybody has spoken (docs/build-plan-issues.md
+ * D8), and there a mention *does* reach: `openIssueThread` joins the agents named
+ * in the body to the hidden channel before it posts (D21). Splitting on a
+ * membership that does not exist yet is what left that picker empty until the
+ * first reply created the channel.
  */
 export function useMentionGroups(channelId: ChannelId | undefined): {
   here: readonly Mentionable[]
@@ -197,7 +205,7 @@ export function useMentionGroups(channelId: ChannelId | undefined): {
   const mentionables = useMentionables()
   const members = useChannelMembers(channelId)
   return React.useMemo(() => {
-    if (channelId === undefined) return { here: [], elsewhere: [] }
+    if (channelId === undefined) return { here: mentionables, elsewhere: [] }
     const ids = new Set((members.data?.items ?? []).map((member) => member.memberId as string))
     const here: Mentionable[] = []
     const elsewhere: Mentionable[] = []
@@ -226,6 +234,49 @@ export function useDirectoryIndex(): ReadonlyMap<string, Mentionable> {
 export function useLookupMember(): (id: string) => Mentionable | undefined {
   const index = useDirectoryIndex()
   return React.useCallback((id: string) => index.get(id), [index])
+}
+
+/**
+ * Who wrote a message, in the shape `MessageBubble` draws.
+ *
+ * Lives here rather than inside the message list because two lists render the
+ * same messages now: the channel and thread stack, and the Activity feed on an
+ * issue page, which interleaves them with Linear's own history
+ * (docs/build-plan-issues.md D13). Two copies of this mapping is two ideas of who
+ * an author is, and the one on the ticket would be the one that drifts.
+ *
+ * An author the directory has never heard of still gets a name and a face: a
+ * member who has left is not a reason for a message to render as nothing.
+ */
+export function useMessageAuthor(): (message: {
+  readonly authorId: string
+  readonly authorKind: MemberKind
+}) => MessageAuthor {
+  const lookup = useLookupMember()
+  return React.useCallback(
+    (message) => {
+      const member = lookup(message.authorId)
+      if (member === undefined) return UNKNOWN_AUTHOR
+      return {
+        kind: member.kind,
+        name: member.name,
+        handle: member.handle,
+        avatar: member.avatar,
+        face: member.face,
+        subtitle: member.subtitle,
+        archived: member.kind === 'agent' && member.archived
+      }
+    },
+    [lookup]
+  )
+}
+
+const UNKNOWN_AUTHOR: MessageAuthor = {
+  kind: 'user',
+  name: 'Unknown member',
+  handle: 'unknown',
+  avatar: { kind: 'emoji', value: '👤' },
+  subtitle: ''
 }
 
 /** `handle → member`, for turning an `@mention` chip into a profile. */

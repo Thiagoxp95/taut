@@ -47,5 +47,7 @@ export class ThreadContext extends Schema.Class<ThreadContext>('ThreadContext')(
    * it exists to give them.
    */
   compactedAt: Schema.optional(Schema.String),
+  /** Live runtime status; absent on older events and runtimes that cannot report it. */
+  compacting: Schema.optional(Schema.Boolean),
   updatedAt: Schema.String
 }) {}

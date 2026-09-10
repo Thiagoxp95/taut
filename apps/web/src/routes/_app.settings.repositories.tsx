@@ -11,7 +11,7 @@ import {
   TrashIcon,
   TriangleAlertIcon,
   UnplugIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { AvailableRepository, Repository } from '@taut/contract'
 import { Badge } from '@taut/ui/components/badge'
 import { Button } from '@taut/ui/components/button'

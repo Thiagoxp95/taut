@@ -1,3 +1,5 @@
+import { MessageComponent } from '@taut/contract/domain'
+import { AuthorizationRequest } from '@taut/contract/domain'
 import {
   Agent,
   AgentFileGrant,
@@ -242,6 +244,13 @@ export const toDepartmentMember = (r: DepartmentMemberRow): DepartmentMember =>
 
 // ── channels ─────────────────────────────────────────────────────────────────
 
+/**
+ * `hidden` and `project_id` arrive with issue threads (docs/build-plan-issues.md
+ * D9). They are ordinary columns of an ordinary channel: every SELECT that builds
+ * a `ChannelRow` has to list them, because a channel read without them decodes as
+ * visible and project-less — which is the sidebar drawing a row for a ticket's
+ * conversation, the one thing D9 exists to prevent.
+ */
 export const ChannelRow = Schema.Struct({
   id: ChannelId,
   company_id: CompanyId,
@@ -249,6 +258,9 @@ export const ChannelRow = Schema.Struct({
   name: DisplayName,
   kind: ChannelKind,
   archived_at: Schema.NullOr(Schema.DateTimeUtc),
+  /** SQLite's 0/1, like `linear_users.active`. */
+  hidden: Schema.Number,
+  project_id: Schema.NullOr(ProjectId),
   created_at: Schema.DateTimeUtc
 })
 export type ChannelRow = typeof ChannelRow.Type
@@ -261,6 +273,8 @@ export const toChannel = (r: ChannelRow): Channel =>
     name: r.name,
     kind: r.kind,
     archivedAt: orUndefined(r.archived_at),
+    hidden: r.hidden !== 0,
+    projectId: orUndefined(r.project_id),
     createdAt: r.created_at
   })
 
@@ -283,6 +297,12 @@ export const toChannelMember = (r: ChannelMemberRow): ChannelMember =>
 // ── messages & notifications ─────────────────────────────────────────────────
 
 export const MessageRow = Schema.Struct({
+  component_json: Schema.optionalWith(Schema.NullOr(Schema.parseJson(MessageComponent)), {
+    default: () => null
+  }),
+  authorization_json: Schema.optionalWith(Schema.NullOr(Schema.parseJson(AuthorizationRequest)), {
+    default: () => null
+  }),
   id: MessageId,
   company_id: CompanyId,
   channel_id: ChannelId,
@@ -317,6 +337,8 @@ export const parseRunOverride = (json: string | null): RunOverride | undefined =
 
 export const toMessage = (r: MessageRow): Message =>
   new Message({
+    authorization: r.authorization_json ?? undefined,
+    component: r.component_json ?? undefined,
     id: r.id,
     companyId: r.company_id,
     channelId: r.channel_id,
@@ -974,12 +996,20 @@ const LabelsJson = Schema.parseJson(Schema.Array(IssueLabel))
 const toIssueStateType = (raw: string): IssueStateType =>
   Schema.is(IssueStateType)(raw) ? raw : 'unknown'
 
+/**
+ * The whole ticket (docs/build-plan-issues.md D6), not just the row an Issues tab
+ * draws. Every column added by D6 is nullable, because the mirror is full of rows
+ * synced before the plan existed and they still have to decode — `sub_issue_count`
+ * is the exception only because SQLite defaults it to 0, which is the same answer
+ * "Linear declined to say" gives.
+ */
 export const ProjectIssueRow = Schema.Struct({
   id: ProjectIssueId,
   project_id: ProjectId,
   linear_id: Schema.String,
   identifier: Schema.String,
   title: Schema.String,
+  description: Schema.NullOr(Schema.String),
   state_id: Schema.String,
   state_name: Schema.String,
   state_type: Schema.String,
@@ -990,14 +1020,29 @@ export const ProjectIssueRow = Schema.Struct({
   assignee_id: Schema.NullOr(Schema.String),
   assignee_name: Schema.NullOr(Schema.String),
   assignee_avatar: Schema.NullOr(Schema.String),
+  creator_id: Schema.NullOr(Schema.String),
+  creator_name: Schema.NullOr(Schema.String),
+  creator_avatar: Schema.NullOr(Schema.String),
   labels: LabelsJson,
+  team_id: Schema.NullOr(Schema.String),
+  team_key: Schema.NullOr(Schema.String),
   milestone_name: Schema.NullOr(Schema.String),
+  milestone_id: Schema.NullOr(Schema.String),
   due_date: Schema.NullOr(Schema.String),
+  estimate: Schema.NullOr(Schema.Number),
+  parent_linear_id: Schema.NullOr(Schema.String),
+  parent_identifier: Schema.NullOr(Schema.String),
+  parent_title: Schema.NullOr(Schema.String),
+  sub_issue_count: Schema.Number,
   url: Schema.String,
   sort_order: Schema.Number,
   created_at: Schema.NullOr(Schema.DateTimeUtc),
   updated_at: Schema.NullOr(Schema.DateTimeUtc),
-  synced_at: Schema.DateTimeUtc
+  completed_at: Schema.NullOr(Schema.DateTimeUtc),
+  canceled_at: Schema.NullOr(Schema.DateTimeUtc),
+  synced_at: Schema.DateTimeUtc,
+  /** Taut's own, and the only column here Linear knows nothing about (D8). */
+  thread_message_id: Schema.NullOr(MessageId)
 })
 export type ProjectIssueRow = typeof ProjectIssueRow.Type
 
@@ -1008,6 +1053,7 @@ export const toProjectIssue = (r: ProjectIssueRow): ProjectIssue =>
     linearId: r.linear_id,
     identifier: r.identifier,
     title: r.title,
+    description: orUndefined(r.description),
     state: IssueState.make({
       id: r.state_id,
       name: r.state_name,
@@ -1025,14 +1071,42 @@ export const toProjectIssue = (r: ProjectIssueRow): ProjectIssue =>
             name: r.assignee_name,
             avatarUrl: orUndefined(r.assignee_avatar)
           },
+    creator:
+      r.creator_id === null || r.creator_name === null
+        ? undefined
+        : {
+            linearId: r.creator_id,
+            name: r.creator_name,
+            avatarUrl: orUndefined(r.creator_avatar)
+          },
     labels: r.labels,
+    // A team with an id but no key is Linear half-answering; the pair is what a
+    // create mutation needs (D6), so it is all-or-nothing here.
+    team:
+      r.team_id === null || r.team_key === null ? undefined : { id: r.team_id, key: r.team_key },
     milestoneName: orUndefined(r.milestone_name),
+    milestoneId: orUndefined(r.milestone_id),
     dueDate: orUndefined(r.due_date),
+    estimate: orUndefined(r.estimate),
+    parent:
+      r.parent_linear_id === null
+        ? undefined
+        : {
+            linearId: r.parent_linear_id,
+            // A parent Linear named without an identifier or a title still has to
+            // draw a breadcrumb; its own id is the last thing left to show.
+            identifier: r.parent_identifier ?? r.parent_linear_id.slice(0, 8),
+            title: r.parent_title ?? 'Untitled'
+          },
+    subIssueCount: Math.max(0, Math.round(r.sub_issue_count)),
     url: r.url,
     sortOrder: r.sort_order,
     createdAt: orUndefined(r.created_at),
     updatedAt: orUndefined(r.updated_at),
-    syncedAt: r.synced_at
+    completedAt: orUndefined(r.completed_at),
+    canceledAt: orUndefined(r.canceled_at),
+    syncedAt: r.synced_at,
+    threadId: orUndefined(r.thread_message_id)
   })
 
 export const ProjectMilestoneRow = Schema.Struct({

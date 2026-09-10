@@ -1,3 +1,5 @@
+import { ComponentQuestions, RenderComponentRequest } from '@taut/contract/domain'
+export { RenderComponentRequest } from '@taut/contract/domain'
 /**
  * The `/api/agent-runtime/*` wire protocol between the `taut` MCP server / CLI (running inside
  * the agent's machine) and the Taut server. This file is the contract the server implements.
@@ -125,6 +127,10 @@ export type ErrorBody = typeof ErrorBody.Type
 // --- messaging (§9) -----------------------------------------------------------
 
 export const SendRequest = Schema.Struct({
+  delivery: Schema.optional(Schema.Literal('dm')).annotations({
+    description:
+      'Set to "dm" when asked to send a private/direct message. Opens your own DM with the @handle on first use; never use #dm.'
+  }),
   to: Target.annotations({
     description: '"@handle" of a member or "#channel". Omit-able only on the server side.'
   }),
@@ -140,6 +146,19 @@ export const SendRequest = Schema.Struct({
   })
 })
 export type SendRequest = typeof SendRequest.Type
+
+export const DeleteRequest = Schema.Struct({
+  messageId: Schema.String.pipe(Schema.pattern(/^msg_[A-Za-z0-9-]+$/)).annotations({
+    description: 'Id of your own message to remove, from taut_send or mandate_propose (message.id).'
+  })
+})
+export type DeleteRequest = typeof DeleteRequest.Type
+
+export const DeleteResponse = Schema.Struct({
+  deleted: Schema.Literal(true),
+  messageId: Schema.String
+})
+export type DeleteResponse = typeof DeleteResponse.Type
 
 export const SendResponse = Schema.Struct({
   /** Always `true`. `false` is the `Deflected` shape below (D7). */
@@ -206,6 +225,11 @@ export const InboxResponse = Schema.Struct({
 export type InboxResponse = typeof InboxResponse.Type
 
 export const AskRequest = Schema.Struct({
+  questions: Schema.optional(ComponentQuestions),
+  delivery: Schema.optional(Schema.Literal('dm')).annotations({
+    description:
+      'Set to "dm" to ask privately in your own DM with the @handle, opened on first use.'
+  }),
   to: Target.annotations({
     description: 'Who must answer: "@handle" (usually your department head).'
   }),
@@ -218,10 +242,23 @@ export const AskRequest = Schema.Struct({
 })
 export type AskRequest = typeof AskRequest.Type
 
+export const AskUserQuestionRequest = Schema.Struct({
+  ...AskRequest.fields,
+  questions: ComponentQuestions
+})
+export const RenderComponentResponse = Schema.Struct({
+  messageId: Schema.String,
+  signalId: Schema.optional(Schema.String),
+  endsAt: Schema.optional(Schema.String)
+})
+export type RenderComponentResponse = typeof RenderComponentResponse.Type
+
 export const AskCreated = Schema.Struct({
   askId: Schema.String,
   messageId: Schema.String,
-  threadId: Schema.String
+  threadId: Schema.String,
+  /** The recipient needs this conversation's floor; end this turn instead of polling. */
+  parked: Schema.optional(Schema.Boolean)
 })
 export type AskCreated = typeof AskCreated.Type
 
@@ -293,6 +330,35 @@ export const HandoffResponse = Schema.Struct({
   messageId: Schema.String
 })
 export type HandoffResponse = typeof HandoffResponse.Type
+
+// --- same-department discovery ------------------------------------------------
+
+export const AgentSearchRequest = Schema.Struct({
+  query: Schema.optional(Schema.String.pipe(Schema.maxLength(200))).annotations({
+    description:
+      'Words to match against teammate names, handles, roles and active skill summaries. Omit to list teammates.'
+  }),
+  limit: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.between(1, 50))).annotations({
+    description: 'Maximum results (default 20, maximum 50). Refine query if hasMore is true.'
+  })
+})
+export type AgentSearchRequest = typeof AgentSearchRequest.Type
+
+/** Explicit public projection: never include mandates, skill bodies or credential metadata. */
+export const DiscoverableAgent = Schema.Struct({
+  id: Schema.String,
+  handle: Schema.String,
+  name: Schema.String,
+  role: Schema.String,
+  status: Schema.Literal('active', 'paused'),
+  skills: Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.String }))
+})
+export type DiscoverableAgent = typeof DiscoverableAgent.Type
+export const AgentSearchResponse = Schema.Struct({
+  agents: Schema.Array(DiscoverableAgent),
+  hasMore: Schema.Boolean
+})
+export type AgentSearchResponse = typeof AgentSearchResponse.Type
 
 // --- reactions (docs/build-plan-steering-reactions.md D1-D3) ------------------
 
@@ -605,6 +671,88 @@ export type LinearProjectsResponse = typeof LinearProjectsResponse.Type
 export const LinearProjectsQuery = Schema.Struct({})
 export type LinearProjectsQuery = typeof LinearProjectsQuery.Type
 
+// --- one ticket, read and changed (docs/build-plan-issues.md D18) ---------------
+
+/**
+ * How an agent names a ticket: the identifier a human quoted at it (`ENG-4636`),
+ * or the `pis_…` id a Taut link carries (docs/build-plan-issues.md D15). The
+ * server resolves either, inside the agent's own company and nowhere else.
+ */
+export const GetIssueRequest = Schema.Struct({
+  ref: Schema.String.pipe(Schema.minLength(1)).annotations({
+    description:
+      'The ticket: its Linear identifier as people write it (`ENG-4636`, case does not matter) or its `pis_…` id.'
+  })
+})
+export type GetIssueRequest = typeof GetIssueRequest.Type
+
+/**
+ * A ticket as an agent needs to see it: what it is, where it stands, and what it
+ * hangs under. Read from Taut's mirror, so it is exactly what the humans on the
+ * issue page are looking at.
+ */
+export const IssueSummary = Schema.Struct({
+  /** Linear's human key, e.g. `ENG-4636`. Quote this, never the `pis_…` id. */
+  identifier: Schema.String,
+  title: Schema.String,
+  /** The ticket body as markdown, when somebody wrote one. */
+  description: Schema.optional(Schema.String),
+  /** The workflow state it sits in: `Todo`, `In progress`, whatever the team calls it. */
+  state: Schema.String,
+  /** `No priority`, `Urgent`, `High`, `Medium`, `Low` — Linear's own words. */
+  priority: Schema.String,
+  /** Who it is assigned to in Linear, if anyone. */
+  assignee: Schema.optional(Schema.String),
+  labels: Schema.Array(Schema.String),
+  projectId: Schema.String,
+  projectName: Schema.String,
+  milestone: Schema.optional(Schema.String),
+  /** `YYYY-MM-DD`, when the ticket has a due date. */
+  dueDate: Schema.optional(Schema.String),
+  estimate: Schema.optional(Schema.Number),
+  /** The ticket this one is filed under, when it is a sub-issue. */
+  parent: Schema.optional(Schema.String),
+  subIssues: Schema.Array(Schema.String),
+  url: Schema.String
+})
+export type IssueSummary = typeof IssueSummary.Type
+
+/**
+ * What an agent may change about a ticket (D18). Everything is optional and
+ * leaving a field out leaves it alone; sending nothing at all is refused, because
+ * a change that changes nothing is a mistake worth hearing about.
+ *
+ * `state` is a *name*, not an id: an agent has no way to know a workflow state's
+ * UUID, and Taut resolves the name against the team's live states so a name the
+ * team does not have comes back as the list of the ones it does.
+ */
+export const UpdateIssueRequest = Schema.Struct({
+  ref: Schema.String.pipe(Schema.minLength(1)).annotations({
+    description: 'The ticket, as `linear_get_issue` takes it: `ENG-4636` or a `pis_…` id.'
+  }),
+  title: Schema.optional(
+    Schema.String.pipe(Schema.minLength(1), Schema.maxLength(255))
+  ).annotations({ description: 'A new title. Only when the old one is actually wrong.' }),
+  description: Schema.optional(Schema.String.pipe(Schema.maxLength(50_000))).annotations({
+    description:
+      'Replaces the whole ticket body, so include what was already there if it still applies.'
+  }),
+  state: Schema.optional(Schema.String).annotations({
+    description:
+      'The workflow state to move it to, by name as the team writes it: `In Progress`, `Done`, `Todo`. Case does not matter.'
+  }),
+  priority: Schema.optional(Schema.Number.pipe(Schema.between(0, 4))).annotations({
+    description: "Linear's priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low."
+  }),
+  dueDate: Schema.optional(Schema.String).annotations({
+    description: '`YYYY-MM-DD`, or the empty string to clear the due date.'
+  }),
+  estimate: Schema.optional(Schema.Number).annotations({
+    description: "The team's estimate in whatever unit it scores in. Only if you were told one."
+  })
+})
+export type UpdateIssueRequest = typeof UpdateIssueRequest.Type
+
 // --- signals (docs/build-plan-triggers.md Part II) --------------------------------
 
 /**
@@ -682,6 +830,69 @@ export type CancelSignalRequest = typeof CancelSignalRequest.Type
 
 export const CancelSignalResponse = Schema.Struct({ cancelled: Schema.Boolean })
 export type CancelSignalResponse = typeof CancelSignalResponse.Type
+
+// --- canvases -------------------------------------------------------------------
+
+/** A canvas owned by this agent in the current conversation; HTML stays out of responses. */
+export const CanvasSummary = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  channelId: Schema.String,
+  threadId: Schema.optional(Schema.String),
+  agentId: Schema.String,
+  open: Schema.Boolean,
+  revision: Schema.Number,
+  updatedAt: IsoDate
+})
+export type CanvasSummary = typeof CanvasSummary.Type
+
+const CanvasTitle = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200))
+const CanvasHtml = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(1_000_000)).annotations(
+  {
+    description:
+      'A self-contained HTML document with inline CSS and JavaScript. Use data URLs for assets; the sandbox has no network or parent application access.'
+  }
+)
+const CanvasId = Schema.String.pipe(Schema.minLength(1)).annotations({
+  description: 'The id returned by canvas_create or canvas_list.'
+})
+
+export const CanvasCreateRequest = Schema.Struct({
+  title: CanvasTitle,
+  html: CanvasHtml,
+  open: Schema.optional(Schema.Boolean).annotations({
+    description: 'Show the canvas immediately; defaults to true.'
+  })
+})
+export type CanvasCreateRequest = typeof CanvasCreateRequest.Type
+
+export const CanvasCreateResponse = Schema.Struct({ canvas: CanvasSummary })
+export type CanvasCreateResponse = typeof CanvasCreateResponse.Type
+
+export const CanvasUpdateRequest = Schema.Struct({
+  canvasId: CanvasId,
+  title: Schema.optional(CanvasTitle),
+  html: Schema.optional(CanvasHtml)
+})
+export type CanvasUpdateRequest = typeof CanvasUpdateRequest.Type
+
+export const CanvasUpdateResponse = CanvasCreateResponse
+export type CanvasUpdateResponse = typeof CanvasUpdateResponse.Type
+
+export const CanvasOpenRequest = Schema.Struct({ canvasId: CanvasId })
+export type CanvasOpenRequest = typeof CanvasOpenRequest.Type
+export const CanvasOpenResponse = CanvasCreateResponse
+export type CanvasOpenResponse = typeof CanvasOpenResponse.Type
+
+export const CanvasCloseRequest = CanvasOpenRequest
+export type CanvasCloseRequest = typeof CanvasCloseRequest.Type
+export const CanvasCloseResponse = CanvasCreateResponse
+export type CanvasCloseResponse = typeof CanvasCloseResponse.Type
+
+export const CanvasListQuery = Schema.Struct({})
+export type CanvasListQuery = typeof CanvasListQuery.Type
+export const CanvasListResponse = Schema.Struct({ items: Schema.Array(CanvasSummary) })
+export type CanvasListResponse = typeof CanvasListResponse.Type
 
 // --- the route table ------------------------------------------------------------
 
@@ -806,6 +1017,7 @@ const route = <Req extends Schema.Schema.AnyNoContext, Res extends Schema.Schema
  * | askStatus        | GET    | /ask/:id?wait=<ms>       |
  * | done             | POST   | /done                    |
  * | handoff          | POST   | /handoff                 |
+ * | delete           | POST   | /delete                  |
  * | react            | POST   | /react                   |
  * | memorySearch     | POST   | /memory/search           |
  * | memoryGrep       | POST   | /memory/grep             |
@@ -826,15 +1038,47 @@ const route = <Req extends Schema.Schema.AnyNoContext, Res extends Schema.Schema
  * | githubOpenPr     | POST   | /github/pull-request     |
  * | linearProjects   | GET    | /linear/projects         |
  * | linearCreateIssue| POST   | /linear/issue            |
+ * | linearGetIssue   | GET    | /linear/issue?ref=       |
+ * | linearUpdateIssue| POST   | /linear/issue/update     |
  */
+export const ProposeMandateRequest = Schema.Struct({
+  mandate: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(100_000)).annotations({
+    description:
+      'Complete proposed replacement mandate in Markdown. Sent as a preview for human approval; never applied by this tool.'
+  })
+})
+export type ProposeMandateRequest = typeof ProposeMandateRequest.Type
+export const ProposeMandateResponse = Schema.Struct({
+  message: Schema.Struct({
+    id: Schema.String,
+    channelId: Schema.String,
+    threadId: Schema.optional(Schema.String)
+  })
+})
+export type ProposeMandateResponse = typeof ProposeMandateResponse.Type
+
 export const AgentRuntimeRoutes = {
+  agentSearch: route('POST', '/agents/search', AgentSearchRequest, AgentSearchResponse),
+  proposeMandate: route('POST', '/mandate/propose', ProposeMandateRequest, ProposeMandateResponse),
   send: route('POST', '/send', SendRequest, SendResult),
+  delete: route('POST', '/delete', DeleteRequest, DeleteResponse),
   inbox: route('GET', '/inbox', InboxQuery, InboxResponse),
+  renderComponent: route(
+    'POST',
+    '/components/render',
+    RenderComponentRequest,
+    RenderComponentResponse
+  ),
   ask: route('POST', '/ask', AskRequest, AskCreated),
   askStatus: route('GET', '/ask/:id', AskStatusQuery, AskStatus),
   done: route('POST', '/done', DoneRequest, DoneResult),
   handoff: route('POST', '/handoff', HandoffRequest, HandoffResponse),
   react: route('POST', '/react', ReactRequest, ReactResponse),
+  canvasCreate: route('POST', '/canvases/create', CanvasCreateRequest, CanvasCreateResponse),
+  canvasUpdate: route('POST', '/canvases/update', CanvasUpdateRequest, CanvasUpdateResponse),
+  canvasOpen: route('POST', '/canvases/open', CanvasOpenRequest, CanvasOpenResponse),
+  canvasClose: route('POST', '/canvases/close', CanvasCloseRequest, CanvasCloseResponse),
+  canvasList: route('GET', '/canvases', CanvasListQuery, CanvasListResponse),
   memorySearch: route('POST', '/memory/search', MemorySearchRequest, MemoryHits),
   memoryGrep: route('POST', '/memory/grep', MemoryGrepRequest, MemoryItems),
   memoryRecall: route('POST', '/memory/recall-thread', MemoryRecallThreadRequest, MemoryItems),
@@ -861,6 +1105,8 @@ export const AgentRuntimeRoutes = {
   ),
   linearProjects: route('GET', '/linear/projects', LinearProjectsQuery, LinearProjectsResponse),
   linearCreateIssue: route('POST', '/linear/issue', CreateIssueRequest, CreateIssueResponse),
+  linearGetIssue: route('GET', '/linear/issue', GetIssueRequest, IssueSummary),
+  linearUpdateIssue: route('POST', '/linear/issue/update', UpdateIssueRequest, IssueSummary),
   emitSignal: route('POST', '/signals/emit', EmitSignalRequest, EmitSignalResponse),
   listSignals: route('GET', '/signals', ListSignalsQuery, ListSignalsResponse),
   cancelSignal: route('POST', '/signals/cancel', CancelSignalRequest, CancelSignalResponse)

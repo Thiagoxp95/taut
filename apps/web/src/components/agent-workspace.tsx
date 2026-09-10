@@ -10,7 +10,7 @@
  * machine card and the Browser pane, over a browser-only socket (`pty=0`).
  */
 import * as React from 'react'
-import { FolderIcon, PlugIcon, PowerIcon, ServerIcon, SquareIcon } from 'lucide-react'
+import { FolderIcon, PlugIcon, PowerIcon, ServerIcon, SquareIcon } from '@taut/ui/components/icons'
 import type { Agent, AgentId, MachineInfo } from '@taut/contract'
 import { Badge } from '@taut/ui/components/badge'
 import { Button } from '@taut/ui/components/button'
@@ -136,7 +136,7 @@ function MachineCard({
           {machine.home ? ` · home ${machine.home}` : ''}
         </p>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 [&>button]:max-w-full [&>button]:whitespace-normal">
         {running ? (
           <Button
             size="sm"

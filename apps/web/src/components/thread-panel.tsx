@@ -1,12 +1,14 @@
 import * as React from 'react'
-import { MessagesSquareIcon, XIcon } from 'lucide-react'
+import { MessagesSquareIcon, XIcon } from '@taut/ui/components/icons'
 import type { ChannelId, MessageId } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
+import { ChannelCanvases } from '@/components/canvas-dialog'
 import { Composer } from '@/components/composer'
 import { ContextMeter } from '@/components/context-meter'
 import { EntityAvatar } from '@/components/entity-avatar'
 import { MessageList, MessageListSkeleton } from '@/components/message-list'
 import { EmptyState } from '@/components/page'
+import { PaneHandle } from '@/components/pane-layout'
 import { ThreadSignals } from '@/components/thread-signals'
 import { useLookupMember } from '@/hooks/use-directory'
 import { useMessages, useThread } from '@/lib/api'
@@ -18,6 +20,7 @@ export function ThreadPanel({
   channelId,
   threadId,
   focusId,
+  browserAction,
   onFocused,
   onClose
 }: {
@@ -25,6 +28,7 @@ export function ThreadPanel({
   threadId: MessageId
   /** From `?at=<messageId>` when the hit is a reply: scroll to it, focus it, flash it. */
   focusId?: MessageId
+  browserAction?: React.ReactNode
   onFocused?: () => void
   onClose: () => void
 }) {
@@ -47,7 +51,11 @@ export function ThreadPanel({
   const count = root?.thread?.replyCount ?? replies.length
 
   return (
-    <aside className="flex w-[24rem] shrink-0 flex-col border-l bg-background">
+    <aside
+      aria-label="Thread"
+      className="taut-thread-panel flex min-h-0 w-full min-w-0 shrink-0 flex-col bg-background @3xl/conversation:w-[var(--thread-width)] @3xl/conversation:border-l"
+    >
+      <PaneHandle pane="thread" label="Resize thread" />
       <header className="taut-topbar flex h-14 shrink-0 items-center gap-3 border-b bg-background px-4">
         <MessagesSquareIcon className="size-4 text-muted-foreground" />
         <div className="min-w-0">
@@ -56,6 +64,7 @@ export function ThreadPanel({
             {count === 0 ? 'No replies yet' : `${count} ${count === 1 ? 'reply' : 'replies'}`}
           </p>
         </div>
+        {browserAction}
         {/*
           Who is holding a context window in this conversation, and how full it is
           (docs/build-plan-context-meter.md D11). A thread is a session, so this row is the
@@ -63,12 +72,14 @@ export function ThreadPanel({
           and the header is where that stops being an abstraction.
         */}
         {contexts.length === 0 ? null : (
-          <div className="ml-auto flex items-center gap-1.5">
+          // Leave breathing room around the context avatars inside the scrollport.
+          <div className="taut-rail ml-auto flex min-w-0 items-center gap-1.5 overflow-x-auto overflow-y-hidden p-1">
             {contexts.map((context) => {
               const member = lookup(context.agentId)
               return (
                 <ContextMeter key={context.agentId} context={context}>
                   <EntityAvatar
+                    memberId={context.agentId}
                     kind="agent"
                     face={member?.face}
                     name={member?.name ?? ''}
@@ -79,11 +90,12 @@ export function ThreadPanel({
             })}
           </div>
         )}
+        <ChannelCanvases threadId={threadId} />
         <Button
           variant="ghost"
           size="icon-sm"
           aria-label="Close thread"
-          className={contexts.length === 0 ? 'ml-auto' : undefined}
+          className={contexts.length === 0 ? 'ml-auto shrink-0' : 'shrink-0'}
           onClick={onClose}
         >
           <XIcon />

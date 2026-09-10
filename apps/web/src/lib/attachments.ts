@@ -10,6 +10,22 @@
 /** Icon families a mime type collapses into. */
 export type AttachmentKind = 'image' | 'pdf' | 'text' | 'archive' | 'file'
 
+/** File extensions also cover documents uploaded as generic binary/plain text. */
+export function canvasAttachmentFormat({
+  name,
+  mimeType
+}: {
+  name: string
+  mimeType: string
+}): 'html' | 'markdown' | undefined {
+  const mime = mimeType.split(';')[0]?.trim().toLowerCase()
+  if (/\.html?$/i.test(name) || mime === 'text/html' || mime === 'application/xhtml+xml')
+    return 'html'
+  if (/\.(md|markdown)$/i.test(name) || mime === 'text/markdown' || mime === 'text/x-markdown')
+    return 'markdown'
+  return undefined
+}
+
 const ARCHIVE_TYPES = new Set([
   'application/zip',
   'application/x-zip-compressed',

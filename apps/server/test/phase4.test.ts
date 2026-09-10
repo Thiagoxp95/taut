@@ -268,14 +268,13 @@ describe('phase 4 (scheduler → task run → streaming reply → agent-runtime 
           expect(reply.threadId).toBe(trigger.id)
           expect(reply.channelId).toBe(dm.id)
 
-          // Event order: created(user) < started(streaming) < delta… < done < notification(agent_done).
+          // Progress stays ephemeral; the done event carries the complete reply.
           const events = yield* eventsSince(trigger.seq - 1)
           const types = events.map((e) => e.type)
           const idx = (t: string) => types.indexOf(t)
           expect(idx('message.created')).toBeGreaterThanOrEqual(0)
           expect(idx('agent.task.started')).toBeGreaterThan(idx('message.created'))
-          expect(idx('agent.task.delta')).toBeGreaterThan(idx('agent.task.started'))
-          expect(idx('agent.task.done')).toBeGreaterThan(idx('agent.task.delta'))
+          expect(idx('agent.task.done')).toBeGreaterThan(idx('agent.task.started'))
           const started = need(
             events.find((e) => e.type === 'agent.task.started'),
             'started'
@@ -285,7 +284,10 @@ describe('phase 4 (scheduler → task run → streaming reply → agent-runtime 
           const deltas = events
             .filter((e) => e.type === 'agent.task.delta')
             .map((e) => e.payload['delta'] as string)
-          expect(deltas.join('')).toBe('pong')
+          expect(deltas).toEqual([])
+          expect(
+            (events.find((e) => e.type === 'agent.task.done')?.payload['message'] as Message).body
+          ).toBe('pong')
           const presence = events
             .filter((e) => e.type === 'presence.changed')
             .map((e) => e.payload['state'])
@@ -398,7 +400,7 @@ describe('phase 4 (scheduler → task run → streaming reply → agent-runtime 
       })
     )
 
-    it.effect('deltas arrive in order and concatenate to the final body', () =>
+    it.effect('holds partial text until the completed answer arrives', () =>
       Effect.gen(function* () {
         const owner = need(state.owner, 'owner')
         const dm = need(state.dm, 'dm')
@@ -412,8 +414,10 @@ describe('phase 4 (scheduler → task run → streaming reply → agent-runtime 
         const deltas = events
           .filter((e) => e.type === 'agent.task.delta' && e.payload['taskId'] === task.id)
           .map((e) => e.payload['delta'] as string)
-        expect(deltas.length).toBeGreaterThanOrEqual(2)
-        expect(deltas).toEqual(['pi', 'ng'])
+        expect(deltas).toEqual([])
+        expect(
+          (events.find((e) => e.type === 'agent.task.done')?.payload['message'] as Message).body
+        ).toBe('ping')
       })
     )
 

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { MonitorUpIcon } from 'lucide-react'
+import { MonitorUpIcon } from '@taut/ui/components/icons'
 import { cn } from '@taut/ui/lib/utils'
 
 import { useHuddle } from '@/hooks/use-huddle'

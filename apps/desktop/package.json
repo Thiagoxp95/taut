@@ -7,19 +7,19 @@
   "main": "./out/main/index.js",
   "author": "Taut",
   "scripts": {
-    "dev": "electron-vite dev",
-    "start": "electron-vite preview",
-    "build": "electron-vite build",
+    "dev": "electron-vite dev --config electron.vite.config.ts",
+    "start": "electron-vite preview --config electron.vite.config.ts",
+    "build": "electron-vite build --config electron.vite.config.ts",
     "lint": "eslint --cache .",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "pnpm run typecheck:node && pnpm run typecheck:web",
     "clean": "rm -rf out dist .turbo node_modules .eslintcache",
     "postinstall": "install-electron && electron-builder install-app-deps",
-    "package": "pnpm run build && electron-builder --dir",
-    "package:mac": "pnpm run build && electron-builder --mac",
-    "package:win": "pnpm run build && electron-builder --win",
-    "package:linux": "pnpm run build && electron-builder --linux"
+    "package": "pnpm run build && electron-builder --config electron-builder.unsigned.yml --mac --dir --publish never",
+    "package:mac": "node scripts/package-mac.mjs --unsigned",
+    "release:mac": "node scripts/package-mac.mjs --release",
+    "test:release": "node --test scripts/package-mac.test.mjs"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -27,7 +27,7 @@
     "@taut/contract": "workspace:*",
     "@taut/ui": "workspace:*",
     "effect": "3.22.1",
-    "lucide-react": "^1.42.0",
+    "electron-updater": "^6.8.9",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "ws": "^8.21.3"

@@ -9,6 +9,7 @@
 import { Schema } from 'effect'
 
 import { Agent, AgentSkill } from './domain/agent.js'
+import { Canvas } from './domain/canvas.js'
 import { Call } from './domain/call.js'
 import { Channel } from './domain/channel.js'
 import { Company, Membership } from './domain/company.js'
@@ -36,6 +37,7 @@ import {
   MemberId,
   MessageId,
   ProjectId,
+  ProjectIssueId,
   RepositoryId,
   RoutineId,
   SubscriptionId,
@@ -107,6 +109,33 @@ export const AgentTaskFailed = variant(
  * the point, ten broadcasts a second for a number that moves once a turn is not.
  */
 export const AgentContextUpdated = variant('agent.context.updated', ThreadContext)
+
+/**
+ * What the agent is doing right now, while it is doing it
+ * (docs/build-plan-activity.md D1): one line of its own reasoning, or the tool it just
+ * reached for, phrased for a reader.
+ *
+ * Ephemeral, like `typing`: broadcast only, never written to the log, `seq` is the current
+ * head. It has to be. It arrives many times a turn, it is worthless a second later, and a
+ * reconnect that replayed it would narrate a run that finished yesterday.
+ *
+ * `text` is already trimmed to one line and truncated server-side; the client renders it
+ * as-is. Each one replaces the last for that message — this is a status line, not a log.
+ */
+export const AgentActivity = variant(
+  'agent.activity',
+  Schema.Struct({
+    taskId: TaskId,
+    messageId: MessageId,
+    agentId: AgentId,
+    kind: Schema.Literal('thinking', 'tool'),
+    text: Schema.String,
+    /** Once true, remains true until this task ends, including between browser calls. */
+    browser: Schema.optional(Schema.Boolean),
+    channelId: Schema.optional(ChannelId),
+    threadId: Schema.optional(MessageId)
+  })
+)
 
 // --- presence / typing ----------------------------------------------------
 
@@ -333,6 +362,43 @@ export const ProjectIssueCreated = variant(
   Schema.Struct({ projectId: ProjectId, issue: ProjectIssue })
 )
 
+/**
+ * One ticket changed (docs/build-plan-issues.md D19). Fired by every write-through
+ * edit, after Linear has confirmed it (D2) — never before, so what this carries is
+ * always what Linear says.
+ *
+ * Carries the whole issue, the `project.changed` bargain: two browsers open on the
+ * same ticket must agree, and a client that got the event redraws without a
+ * refetch while one that missed it converges on the next sync.
+ */
+export const ProjectIssueUpdated = variant(
+  'project.issue.updated',
+  Schema.Struct({ projectId: ProjectId, issue: ProjectIssue })
+)
+
+/**
+ * A ticket was trashed in Linear and its mirror row is gone (D5, D19). Only the
+ * id, because there is no issue left to carry — the reader with the page open
+ * needs to be told to leave it, not shown the row again.
+ *
+ * The thread survives the row, which is why nothing here mentions it.
+ */
+export const ProjectIssueDeleted = variant(
+  'project.issue.deleted',
+  Schema.Struct({ projectId: ProjectId, issueId: ProjectIssueId })
+)
+
+/**
+ * Somebody said the first thing on a ticket, so it has a thread now (D8, D19).
+ * Separate from `project.issue.updated` because it is the one change to an issue
+ * that Linear knows nothing about, and the one a second reader has to act on: the
+ * page must subscribe to `threadId` before the next message arrives.
+ */
+export const ProjectIssueThreadOpened = variant(
+  'project.issue.thread.opened',
+  Schema.Struct({ projectId: ProjectId, issueId: ProjectIssueId, threadId: MessageId })
+)
+
 // --- calls (huddles) ------------------------------------------------------
 
 /**
@@ -356,7 +422,16 @@ export const CallEnded = variant(
 
 // --- the union ------------------------------------------------------------
 
+export const CanvasChanged = variant(
+  'canvas.changed',
+  Schema.Struct({
+    canvas: Canvas,
+    action: Schema.Literal('create', 'update', 'open', 'close')
+  })
+)
+
 export const Event = Schema.Union(
+  CanvasChanged,
   MessageCreated,
   MessageUpdated,
   MessageDeleted,
@@ -365,6 +440,7 @@ export const Event = Schema.Union(
   AgentTaskDone,
   AgentTaskFailed,
   AgentContextUpdated,
+  AgentActivity,
   PresenceChanged,
   Typing,
   NotificationEvent,
@@ -406,6 +482,9 @@ export const Event = Schema.Union(
   ProjectLinearChanged,
   ProjectLinearMemberChanged,
   ProjectIssueCreated,
+  ProjectIssueUpdated,
+  ProjectIssueDeleted,
+  ProjectIssueThreadOpened,
   CallStarted,
   CallUpdated,
   CallEnded
@@ -416,6 +495,7 @@ export type EventEncoded = typeof Event.Encoded
 
 export type EventType = Event['type']
 export const EventType = Schema.Literal(
+  'canvas.changed',
   'message.created',
   'message.updated',
   'message.deleted',
@@ -424,6 +504,7 @@ export const EventType = Schema.Literal(
   'agent.task.done',
   'agent.task.failed',
   'agent.context.updated',
+  'agent.activity',
   'presence.changed',
   'typing',
   'notification',
@@ -465,13 +546,19 @@ export const EventType = Schema.Literal(
   'project.linear.changed',
   'project.linear.member.changed',
   'project.issue.created',
+  'project.issue.updated',
+  'project.issue.deleted',
+  'project.issue.thread.opened',
   'call.started',
   'call.updated',
   'call.ended'
 ) satisfies Schema.Schema<EventType>
 
 /** Event types that are broadcast but never persisted. */
-export const EphemeralEventTypes: ReadonlySet<EventType> = new Set<EventType>(['typing'])
+export const EphemeralEventTypes: ReadonlySet<EventType> = new Set<EventType>([
+  'typing',
+  'agent.activity'
+])
 
 export type EventOfType<T extends EventType> = Extract<Event, { readonly type: T }>
 export type EventPayload<T extends EventType> = EventOfType<T>['payload']

@@ -71,6 +71,8 @@ describe('codex (untested beyond detect)', () => {
       'session',
       'tool_use',
       'tool_result',
+      // Reasoning is its own event, never part of the reply (docs/build-plan-activity.md D4).
+      'thinking',
       'file_change',
       'file_change',
       'text_delta',
@@ -91,15 +93,16 @@ describe('codex (untested beyond detect)', () => {
       content: 'hi\n',
       isError: false
     })
-    expect(events[3]).toEqual({ type: 'file_change', path: 'src/a.ts', kind: 'create' })
-    expect(events[6]).toEqual({
+    expect(events[3]).toEqual({ type: 'thinking', text: 'thinking' })
+    expect(events[4]).toEqual({ type: 'file_change', path: 'src/a.ts', kind: 'create' })
+    expect(events[7]).toEqual({
       type: 'usage',
       inputTokens: 1200,
       outputTokens: 90,
       cacheReadTokens: 800
     })
-    expect(events[7]).toMatchObject({ type: 'context', usedTokens: 1290 })
-    expect(events[8]).toMatchObject({ type: 'done', ok: true })
+    expect(events[8]).toMatchObject({ type: 'context', usedTokens: 1290 })
+    expect(events[9]).toMatchObject({ type: 'done', ok: true })
   })
 })
 

@@ -17,7 +17,7 @@ import {
   StrikethroughIcon,
   TextQuoteIcon,
   CodeIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import { Button } from '@taut/ui/components/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@taut/ui/components/tooltip'
 import { cn } from '@taut/ui/lib/utils'
@@ -411,7 +411,7 @@ export function MarkdownEditor({
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50">
         {showToolbar ? (
-          <div className="taut-scroll flex shrink-0 items-center gap-0.5 overflow-x-auto border-b bg-muted/40 px-1.5 py-1">
+          <div className="taut-scroll flex shrink-0 items-center gap-0.5 overflow-x-auto border-b bg-muted/40 px-1 py-1">
             {COMMANDS.map((entry, index) =>
               entry === 'separator' ? (
                 <span

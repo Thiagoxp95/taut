@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { Link } from '@tanstack/react-router'
-import { ActivityIcon, CalendarIcon, CalendarX2Icon, DiamondIcon } from 'lucide-react'
+import { ActivityIcon, CalendarIcon, CalendarX2Icon, DiamondIcon } from '@taut/ui/components/icons'
 import type { Project, ProjectId } from '@taut/contract'
 import { cn } from '@taut/ui/lib/utils'
 import { ProjectLeadAvatar } from '@/components/project-lead-avatar'
@@ -192,7 +192,7 @@ function BoardColumn({
   return (
     <section
       className={cn(
-        'flex h-full w-[364px] shrink-0 flex-col rounded-lg px-3 transition-colors',
+        'flex h-full w-[min(364px,calc(100vw-2rem))] shrink-0 flex-col rounded-lg px-3 transition-colors',
         // Linear's columns have no chrome of their own; the only time one draws a
         // shape is while a card is hovering over it.
         over && 'bg-accent/40'
@@ -339,7 +339,7 @@ export function ProjectBoard({
           Linear refused the move, so the card went back. Try again, or move it in Linear.
         </p>
       )}
-      <div className="taut-scroll -mx-3 flex min-h-0 flex-1 overflow-x-auto pb-2">
+      <div className="taut-scroll -ml-3 flex min-h-0 min-w-0 flex-1 overflow-x-auto pb-2">
         {columns.map((column) => (
           <BoardColumn
             key={column.id}

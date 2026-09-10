@@ -1,3 +1,4 @@
+import { Canvases } from '../services/canvases.js'
 import { HttpServer } from '@effect/platform'
 import { ClientSocketMessage, ServerSocketMessage, type Event } from '@taut/contract/events'
 import {
@@ -87,6 +88,7 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
     const http = yield* HttpServer.HttpServer
     const eventLog = yield* EventLog
     const bus = yield* Bus
+    const canvases = yield* Canvases
     const { authenticate } = yield* WsAuthenticator
 
     const wss = yield* Effect.acquireRelease(
@@ -121,8 +123,18 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
         const replayFrom = since !== undefined && head - since <= MAX_REPLAY_EVENTS ? since : head
         let cursor = replayFrom
 
-        const deliver = (event: Event) =>
-          isVisibleTo(event, principal.userId) ? send(ws, { type: 'event', event }) : Effect.void
+        const deliver = (event: Event) => {
+          if (!isVisibleTo(event, principal.userId)) return Effect.void
+          if (event.type === 'canvas.changed')
+            return canvases
+              .visibleTo(principal.companyId, event.payload.canvas.channelId, principal.userId)
+              .pipe(
+                Effect.flatMap((visible) =>
+                  visible ? send(ws, { type: 'event', event }) : Effect.void
+                )
+              )
+          return send(ws, { type: 'event', event })
+        }
 
         const outbound = Effect.gen(function* () {
           if (replayFrom !== since) yield* send(ws, { type: 'resync', head })
@@ -149,6 +161,42 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
                       return close(ws, 1013, 'client too slow; reconnect with ?since=')
                     }
                     return deliver(message.event)
+                  }
+                  /*
+                   * The running commentary under a streaming reply
+                   * (docs/build-plan-activity.md D2). Dropped for a backed-up socket on the
+                   * same rule as typing: it is worthless a second later, and the reply's own
+                   * deltas must not queue behind it.
+                   */
+                  case 'Activity': {
+                    if (ws.bufferedAmount > TYPING_DROP_BYTES) return Effect.void
+                    return Effect.gen(function* () {
+                      const visible = yield* canvases.visibleTo(
+                        principal.companyId,
+                        message.channelId,
+                        principal.userId
+                      )
+                      if (!visible) return
+                      yield* send(ws, {
+                        type: 'event',
+                        event: {
+                          seq: cursor,
+                          companyId: message.companyId,
+                          at: DateTime.unsafeNow(),
+                          type: 'agent.activity',
+                          payload: {
+                            taskId: message.taskId,
+                            messageId: message.messageId,
+                            channelId: message.channelId,
+                            threadId: message.threadId,
+                            agentId: message.agentId,
+                            kind: message.kind,
+                            text: message.text,
+                            ...(message.browser === undefined ? {} : { browser: message.browser })
+                          }
+                        }
+                      })
+                    })
                   }
                   case 'Typing': {
                     if (message.userId === principal.userId) return Effect.void

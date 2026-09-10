@@ -1,4 +1,7 @@
-# Taut — one container, one volume. See docs/deploy.md.
+# Legacy named-volume deployment. Retained for existing installations.
+# New installations: node scripts/self-host.mjs init ./self-hosted/my-company
+# then node scripts/self-host.mjs up ./self-hosted/my-company.
+# This legacy file does not provision working agent sandboxes by itself.
 #
 #   export TAUT_MASTER_KEY=$(openssl rand -base64 32)   # keep this; it decrypts the vault
 #   docker compose up -d
@@ -7,7 +10,6 @@ services:
   taut:
     build: .
     image: taut:latest
-    container_name: taut
     restart: unless-stopped
     ports:
       - '3000:3000'
@@ -17,9 +19,9 @@ services:
       TAUT_DATA_DIR: /data
       PORT: '3000'
       NODE_ENV: production
-      # Behind plain http (no TLS terminator yet)? Uncomment or the session
+      # Behind plain http (no TLS terminator yet)? Set TAUT_COOKIE_SECURE=false or the session
       # cookie is Secure-only and login silently fails.
-      # TAUT_COOKIE_SECURE: 'false'
+      TAUT_COOKIE_SECURE: ${TAUT_COOKIE_SECURE:-true}
       # Calls (huddles): unset means off and the UI hides the button (D3). Only
       # meaningful with `--profile calls` up, but harmless to leave set otherwise.
       TAUT_LIVEKIT_URL: ${TAUT_LIVEKIT_URL:-}
@@ -53,135 +55,5 @@ services:
       retries: 3
       start_period: 20s
 
-  # Calls (huddles): self-hosted LiveKit + Redis + eturnal (TURN), all gated behind
-  # `--profile calls` so plain `docker compose up -d` still starts one container
-  # (docs/build-plan-calls.md D3, D9, D10, D14). Bring them up with:
-  #   docker compose --profile calls up -d
-  livekit:
-    image: livekit/livekit-server:v1.13.6
-    container_name: taut-livekit
-    restart: unless-stopped
-    profiles: [calls]
-    command: --config /etc/livekit.yaml
-    # The config comes from the `livekit` entry at the bottom of this file, not from
-    # a file on disk. livekit-server does NOT expand ${VAR} inside its own config —
-    # it only does that for `key_file` — so the secrets have to be substituted before
-    # the container sees them, and compose is what substitutes them.
-    configs:
-      - source: livekit
-        target: /etc/livekit.yaml
-    ports:
-      # Signal (ws), ICE-TCP, and the single-port UDP mux (D9) — not a port range.
-      # Past ~100 concurrent participants on one node, see docs/deploy.md for
-      # switching this service to network_mode: host with a UDP range instead.
-      - '7880:7880'
-      - '7881:7881'
-      - '7882:7882/udp'
-    depends_on:
-      - redis
-
-  redis:
-    image: redis:8.8-alpine
-    container_name: taut-livekit-redis
-    restart: unless-stopped
-    profiles: [calls]
-    # No published port: only `livekit` talks to it, over the compose network.
-    volumes:
-      - livekit-redis-data:/data
-
-  eturnal:
-    image: eturnal/eturnal:1.12.2-alpine
-    container_name: taut-eturnal
-    restart: unless-stopped
-    profiles: [calls]
-    environment:
-      ETURNAL_SECRET: ${TAUT_TURN_SECRET:?set TAUT_TURN_SECRET (openssl rand -hex 32)}
-      ETURNAL_RELAY_IPV4_ADDR: ${TAUT_TURN_PUBLIC_IP:?set TAUT_TURN_PUBLIC_IP, this host's public IPv4}
-      ETURNAL_RELAY_MIN_PORT: 49160
-      ETURNAL_RELAY_MAX_PORT: 49200
-    volumes:
-      - ./deploy/eturnal.yml:/etc/eturnal.yml:ro
-    # The image runs as uid 9000, not root. deploy/eturnal.yml must be readable by
-    # it before you bring this up:
-    #   chown 9000:9000 deploy/eturnal.yml && chmod 640 deploy/eturnal.yml
-    # Skip that and eturnal dies on boot with a permission error, not a helpful one.
-    ports:
-      - '3478:3478/udp'
-      - '3478:3478'
-      - '49160-49200:49160-49200/udp'
-
-  # TLS in front of Taut. Uncomment, set your domain, and drop the `ports:`
-  # block from the taut service so only caddy is exposed.
-  #
-  # caddy:
-  #   image: caddy:2-alpine
-  #   container_name: taut-caddy
-  #   restart: unless-stopped
-  #   ports:
-  #     - '80:80'
-  #     - '443:443'
-  #   volumes:
-  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
-  #     - caddy-data:/data
-  #     - caddy-config:/config
-  #   depends_on:
-  #     - taut
-  #
-  # Caddyfile (two lines, next to this file):
-  #   taut.example.com
-  #   reverse_proxy taut:3000
-
-# Rendered by compose (with .env substituted) and mounted at /etc/livekit.yaml.
-# Keep this the only copy of these values: the API secret and the TURN secret each
-# appear here and in .env, and drift between the two shows up as calls that connect
-# and then silently fail to relay.
-configs:
-  livekit:
-    content: |
-      port: 7880
-
-      rtc:
-        tcp_port: 7881
-        # Single-port UDP mux, not a port range (docs/build-plan-calls.md D9). A
-        # published 50000-60000 range spawns one docker-proxy per port and falls over
-        # on Docker Desktop; past ~100 concurrent participants on one node, switch
-        # this service to network_mode: host with a real range (docs/deploy.md).
-        udp_port: 7882
-        use_external_ip: true
-
-        # eturnal is the only TURN server on this host (D10). The secret is shared
-        # with it: LiveKit mints ephemeral TURN REST credentials that eturnal then
-        # validates. Two entries because one entry carries one protocol.
-        turn_servers:
-          - host: ${TAUT_TURN_HOST:?set TAUT_TURN_HOST, the host clients reach eturnal on}
-            port: 3478
-            protocol: udp
-            secret: ${TAUT_TURN_SECRET:?set TAUT_TURN_SECRET (openssl rand -hex 32)}
-          - host: ${TAUT_TURN_HOST}
-            port: 3478
-            protocol: tcp
-            secret: ${TAUT_TURN_SECRET}
-
-      redis:
-        address: redis:6379
-
-      keys:
-        ${TAUT_LIVEKIT_API_KEY:?set TAUT_LIVEKIT_API_KEY (openssl rand -hex 16)}: ${TAUT_LIVEKIT_API_SECRET:?set TAUT_LIVEKIT_API_SECRET (openssl rand -hex 32)}
-
-      # Who is in a room is decided here, not in the browser (D2). Taut verifies the
-      # JWT LiveKit signs each of these with.
-      webhook:
-        api_key: ${TAUT_LIVEKIT_API_KEY}
-        urls:
-          - http://taut:3000/api/hooks/livekit
-
-      # LiveKit ships its own TURN server. It stays off: eturnal owns 3478, and two
-      # TURN servers on one host is the failure mode to avoid (D10).
-      turn:
-        enabled: false
-
 volumes:
   taut-data:
-  livekit-redis-data:
-  # caddy-data:
-  # caddy-config:

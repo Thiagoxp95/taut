@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { CheckIcon, CopyIcon } from 'lucide-react'
+import { CheckIcon, CopyIcon } from '@taut/ui/components/icons'
 import type { Invite, MembershipRole } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 import {

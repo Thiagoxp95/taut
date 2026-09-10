@@ -2,13 +2,15 @@ import * as React from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import {
   ArrowRightIcon,
+  CalendarCheckInIcon,
+  CalendarAddIcon,
   EllipsisIcon,
   ExternalLinkIcon,
   LayersIcon,
   SquareKanbanIcon,
   SquarePenIcon,
   UsersIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { Project, ProjectMilestone } from '@taut/contract'
 import { ProjectId } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
@@ -52,45 +54,14 @@ import {
  * Linear keeps for its own sidebar — health, progress, issue count, last sync.
  */
 
-/** Linear's start-date glyph: a calendar the date arrives into. */
 function StartDateIcon({ className }: { className?: string }) {
   return (
-    <svg
-      viewBox="0 0 16 16"
-      className={cn('size-3.5 shrink-0 text-muted-foreground', className)}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-      focusable="false"
-    >
-      <path d="M9.4 2.4h2.7a1.5 1.5 0 0 1 1.5 1.5v8.2a1.5 1.5 0 0 1-1.5 1.5H9.4" />
-      <path d="M7.3 5.6 9.7 8l-2.4 2.4" />
-      <path d="M9.4 8H2.6" />
-    </svg>
+    <CalendarCheckInIcon className={cn('size-3.5 shrink-0 text-muted-foreground', className)} />
   )
 }
 
-/** Linear's target-date glyph: a calendar with a date still to be added. */
 function TargetDateIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      className={cn('size-3.5 shrink-0 text-muted-foreground', className)}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-      focusable="false"
-    >
-      <path d="M6.6 2.4H3.9a1.5 1.5 0 0 0-1.5 1.5v8.2a1.5 1.5 0 0 0 1.5 1.5h2.7" />
-      <path d="M11 5.7v4.6M8.7 8h4.6" />
-    </svg>
-  )
+  return <CalendarAddIcon className={cn('size-3.5 shrink-0 text-muted-foreground', className)} />
 }
 
 /**
@@ -163,7 +134,7 @@ function MoreProperties({ project }: { project: Project }) {
   ]
 
   return (
-    <dl className="mt-1 grid w-full grid-cols-[92px_1fr] gap-y-1.5 text-[13px]">
+    <dl className="mt-1 grid w-full grid-cols-[92px_minmax(0,1fr)] gap-y-1.5 text-[13px]">
       {facts.map(([label, value]) => (
         <React.Fragment key={label}>
           <dt className="text-muted-foreground">{label}</dt>
@@ -284,7 +255,7 @@ function ProjectRoute() {
       <>
         <PageHeader title="Project" icon={<SquareKanbanIcon className="size-4" />} />
         <div className="taut-scroll min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[848px] px-[52px] pt-[72px]">
+          <div className="mx-auto w-full max-w-[848px] px-4 pt-8 sm:px-[52px] sm:pt-[72px]">
             <Skeleton className="size-9 rounded-[7px]" />
             <Skeleton className="mt-4 h-8 w-2/3" />
             <Skeleton className="mt-3 h-5 w-full" />
@@ -356,7 +327,7 @@ function ProjectRoute() {
         />
 
         {tab === 'issues' ? (
-          <div className="mx-auto w-full max-w-[1100px] px-6 pt-2 pb-24">
+          <div className="mx-auto w-full max-w-[1100px] px-4 pt-2 pb-12 sm:px-6 sm:pb-24">
             {issuesQuery.isPending ? (
               <div className="space-y-2">
                 <Skeleton className="h-9 rounded-md" />
@@ -369,11 +340,11 @@ function ProjectRoute() {
                 can file one for you.
               </p>
             ) : (
-              <ProjectIssues issues={issuesQuery.data ?? []} url={project.url} />
+              <ProjectIssues issues={issuesQuery.data ?? []} projectId={project.id} />
             )}
           </div>
         ) : (
-          <div className="mx-auto w-full max-w-[848px] px-[52px] pt-[60px] pb-24">
+          <div className="mx-auto w-full max-w-[848px] px-4 pt-8 sm:px-[52px] sm:pt-[60px] pb-24">
             {glyph === undefined ? null : (
               <span
                 aria-hidden
@@ -383,7 +354,7 @@ function ProjectRoute() {
               </span>
             )}
 
-            <h1 className="text-[30px] leading-[36px] font-semibold tracking-[-0.014em]">
+            <h1 className="text-[26px] leading-[32px] [overflow-wrap:anywhere] sm:text-[30px] sm:leading-[36px] font-semibold tracking-[-0.014em]">
               {project.name}
             </h1>
 

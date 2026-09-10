@@ -1,7 +1,9 @@
 import { HttpApiBuilder, HttpServerRequest, HttpServerResponse } from '@effect/platform'
 import { CurrentUser } from '@taut/contract/api'
 import { Effect } from 'effect'
+import { randomBytes } from 'node:crypto'
 import { AppConfig } from '../config.js'
+import { GitHubApp } from '../services/githubApp.js'
 import { Repositories } from '../services/repositories.js'
 import { ServerApi } from './serverApi.js'
 
@@ -68,6 +70,13 @@ const settingsUrl = (base: string, outcome: string, reason?: string): string => 
   return `${base.replace(/\/+$/, '')}/settings/repositories?${query.toString()}`
 }
 
+const htmlAttribute = (value: string): string =>
+  value
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+
 /**
  * The two legs GitHub drives through the owner's browser
  * (docs/build-plan-repositories.md, "The GitHub App manifest flow"): the manifest
@@ -91,6 +100,7 @@ export const GithubRedirectLive = HttpApiBuilder.Router.use((router) =>
   Effect.gen(function* () {
     const repositories = yield* Repositories
     const config = yield* AppConfig
+    const github = yield* GitHubApp
 
     if (config.publicUrl === undefined || config.publicUrl.trim() === '') {
       // The manifest endpoint refuses to build a flow that cannot come back, so
@@ -116,6 +126,43 @@ export const GithubRedirectLive = HttpApiBuilder.Router.use((router) =>
         ),
         Effect.map((location) => HttpServerResponse.empty({ status: 302, headers: { location } }))
       )
+
+    // Electron's external browser API accepts a URL only. Perform GitHub's
+    // manifest POST here, in the browser, without needing its Taut login cookie.
+    yield* router.get(
+      '/api/repositories/github/start',
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const result = yield* Effect.either(github.takeBrowserManifest(query(request, 'token')))
+        const headers = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }
+        if (result._tag === 'Left') {
+          return HttpServerResponse.empty({
+            status: 302,
+            headers: { ...headers, location: settingsUrl(base, 'error', result.left.reason) }
+          })
+        }
+        const manifest = result.right
+        const nonce = randomBytes(16).toString('base64')
+        return HttpServerResponse.text(
+          `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect GitHub · Taut</title></head><body>
+<h1>Continue to GitHub</h1><p>GitHub will ask you to confirm the app name. Taut has filled in the settings.</p>
+<form method="POST" action="${htmlAttribute(manifest.postUrl)}">
+<input type="hidden" name="manifest" value="${htmlAttribute(manifest.manifest)}">
+<button type="submit">Continue to GitHub</button></form>
+<script nonce="${nonce}">document.querySelector('form').submit()</script>
+</body></html>`,
+          {
+            contentType: 'text/html; charset=utf-8',
+            headers: {
+              ...headers,
+              'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; form-action https://github.com; base-uri 'none'; frame-ancestors 'none'`
+            }
+          }
+        )
+      })
+    )
 
     yield* router.get(
       '/api/repositories/github/callback',

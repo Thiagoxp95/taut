@@ -1,12 +1,13 @@
 import { HttpApiEndpoint, HttpApiGroup } from '@effect/platform'
 import { Schema } from 'effect'
 
+import { Canvas, CanvasDocument } from '../domain/canvas.js'
 import { Channel, ChannelMember } from '../domain/channel.js'
 import { ThreadContext } from '../domain/context.js'
 import { MemberKind } from '../domain/enums.js'
 import { DisplayName } from '../domain/primitives.js'
 import { Conflict, Forbidden, NotFound, Validation } from '../errors.js'
-import { ChannelId, DepartmentId, EventSeq, MemberId } from '../ids.js'
+import { ChannelId, DepartmentId, EventSeq, MemberId, MessageId } from '../ids.js'
 import { Page, PageQuery } from './common.js'
 import { Authentication } from './middleware.js'
 
@@ -38,6 +39,22 @@ export const OpenDmPayload = Schema.Struct({ memberKind: MemberKind, memberId: M
 
 export const MarkReadPayload = Schema.Struct({ lastReadSeq: EventSeq })
 
+/** Latest received message per DM, including replies; reading the inbox does not mark it read. */
+export const DmInboxItem = Schema.Struct({
+  channelId: ChannelId,
+  messageId: MessageId,
+  threadId: Schema.NullOr(MessageId),
+  authorId: MemberId,
+  authorKind: MemberKind,
+  body: Schema.String,
+  createdAt: Schema.DateTimeUtc,
+  /** Read watermark across received messages; a streamed reply can finish after a later seq. */
+  seq: EventSeq,
+  unread: Schema.Number,
+  archivedAt: Schema.NullOr(Schema.DateTimeUtc)
+})
+export type DmInboxItem = typeof DmInboxItem.Type
+
 const ChannelPath = Schema.Struct({ channelId: ChannelId })
 const ChannelMemberPath = Schema.Struct({
   channelId: ChannelId,
@@ -47,6 +64,7 @@ const ChannelMemberPath = Schema.Struct({
 
 export class ChannelsGroup extends HttpApiGroup.make('channels')
   .add(HttpApiEndpoint.get('list', '/').setUrlParams(ListChannelsQuery).addSuccess(Page(Channel)))
+  .add(HttpApiEndpoint.get('inbox', '/inbox').addSuccess(Page(DmInboxItem)))
   .add(
     HttpApiEndpoint.post('create', '/')
       .setPayload(CreateChannelPayload)
@@ -125,6 +143,20 @@ export class ChannelsGroup extends HttpApiGroup.make('channels')
       .setPath(ChannelPath)
       .setPayload(MarkReadPayload)
       .addSuccess(ChannelMember)
+      .addError(NotFound)
+      .addError(Forbidden)
+  )
+  .add(
+    HttpApiEndpoint.get('canvases', '/:channelId/canvases')
+      .setPath(ChannelPath)
+      .addSuccess(Schema.Array(Canvas))
+      .addError(NotFound)
+      .addError(Forbidden)
+  )
+  .add(
+    HttpApiEndpoint.get('canvas', '/:channelId/canvases/:canvasId')
+      .setPath(Schema.Struct({ channelId: ChannelId, canvasId: Schema.String }))
+      .addSuccess(CanvasDocument)
       .addError(NotFound)
       .addError(Forbidden)
   )

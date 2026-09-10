@@ -71,6 +71,7 @@ describe('context meter', () => {
           maxTokens: 200_000,
           totalTokens: 480_000,
           model: 'claude-sonnet-4-5',
+          compacting: true,
           compactsAutomatically: true
         })
         yield* contexts.record({
@@ -100,6 +101,7 @@ describe('context meter', () => {
         // Resident and billed are different quantities and both survive the round trip.
         expect(brunoHere.totalTokens).toBe(480_000)
         expect(brunoHere.model).toBe('claude-sonnet-4-5')
+        expect(brunoHere.compacting).toBe(true)
 
         const brunoThere = yield* contexts
           .get(bruno.id, other.id)
@@ -111,6 +113,9 @@ describe('context meter', () => {
         // What the client seeds its rings from on boot.
         const seed = yield* owner.api.channels.context({ path: { channelId: channel.id } })
         expect(seed).toHaveLength(3)
+        expect(seed.find((c) => c.agentId === bruno.id && c.threadId === root.id)?.compacting).toBe(
+          true
+        )
         expect(
           seed
             .filter((c) => c.threadId === root.id)
@@ -133,6 +138,7 @@ describe('context meter', () => {
         const compacted = yield* contexts.get(bruno.id, root.id).pipe(Effect.map(Option.getOrThrow))
         expect(compacted.usedTokens).toBe(30_100)
         expect(compacted.compactedAt).toBe('2026-09-09T12:00:00.000Z')
+        expect(compacted.compacting).toBe(false)
 
         // D8: a cleared session starts cold, so the window it was holding goes with it — and
         // only that one. The same agent's other thread is untouched.

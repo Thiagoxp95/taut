@@ -15,7 +15,7 @@ import {
   PlayIcon,
   PlusIcon,
   TrashIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import {
   describeTrigger,
   type AgentId,
@@ -118,8 +118,8 @@ function RoutineRow({
   const next = nextRunLabel(routine)
 
   return (
-    <li className="flex items-center gap-3 px-4 py-3">
-      <div className="min-w-0 flex-1">
+    <li className="flex flex-wrap items-center gap-3 px-4 py-3">
+      <div className="min-w-0 flex-1 basis-40">
         <p className="truncate text-sm font-medium">{routine.name}</p>
         <p className="truncate text-xs text-muted-foreground">
           {when} · {next}

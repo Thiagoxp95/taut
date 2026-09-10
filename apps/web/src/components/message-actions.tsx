@@ -8,7 +8,7 @@ import {
   PencilIcon,
   SmilePlusIcon,
   TrashIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { Message } from '@taut/contract'
 import { cn } from '@taut/ui/lib/utils'
 import { Button } from '@taut/ui/components/button'
@@ -69,7 +69,7 @@ export function MessageActions({
 
   return (
     <>
-      <div className="pointer-events-none absolute top-0 right-4 z-20 hidden -translate-y-1/2 items-center gap-0.5 rounded-md border bg-background p-0.5 opacity-0 shadow-sm transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 sm:flex">
+      <div className="taut-message-actions mt-1.5 flex w-fit max-w-full flex-wrap items-center gap-0.5 rounded-md border bg-background p-0.5">
         {QUICK.map((emoji) => {
           const on = !mine(emoji)
           return (
@@ -80,7 +80,7 @@ export function MessageActions({
               aria-label={`React with ${emoji}`}
               aria-pressed={!on}
               title={`React with ${emoji}`}
-              className={cn('text-base', !on && 'bg-accent')}
+              className={cn('taut-message-quick text-base', !on && 'bg-accent')}
               onClick={() => onReact(emoji, on)}
             >
               <span aria-hidden>{emoji}</span>
@@ -88,7 +88,7 @@ export function MessageActions({
           )
         })}
 
-        <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
+        <span aria-hidden className="taut-message-quick mx-0.5 h-4 w-px bg-border" />
 
         <ReactionPicker align="end" onPick={(emoji) => onReact(emoji, true)}>
           <Button variant="ghost" size="icon-sm" aria-label="Add reaction" title="Add reaction">

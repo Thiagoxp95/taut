@@ -99,14 +99,22 @@ export function useEffectInfiniteQuery<A>(
   })
 }
 
-type EffectMutationOptions<A, V> = Omit<UseMutationOptions<A, ApiError, V>, 'mutationFn'>
+type EffectMutationOptions<A, V, C> = Omit<UseMutationOptions<A, ApiError, V, C>, 'mutationFn'>
 
-/** Bridge an Effect into a TanStack mutation; failures arrive as `ApiError`. */
-export function useEffectMutation<A, V = void>(
+/**
+ * Bridge an Effect into a TanStack mutation; failures arrive as `ApiError`.
+ *
+ * `C` is the context `onMutate` hands to `onError` and `onSettled`, and it is a
+ * parameter rather than TanStack's default `unknown` so an optimistic mutation
+ * can carry the snapshot it has to roll back to (docs/build-plan-issues.md D3)
+ * without a cast. It defaults to `unknown`, so every mutation that does not roll
+ * anything back reads exactly as it did before.
+ */
+export function useEffectMutation<A, V = void, C = unknown>(
   mutate: (variables: V) => Effect.Effect<A, unknown, Api>,
-  options?: EffectMutationOptions<A, V>
-): UseMutationResult<A, ApiError, V> {
-  return useMutation<A, ApiError, V>({
+  options?: EffectMutationOptions<A, V, C>
+): UseMutationResult<A, ApiError, V, C> {
+  return useMutation<A, ApiError, V, C>({
     ...options,
     mutationFn: (variables) => runEffect(mutate(variables))
   })

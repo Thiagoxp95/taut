@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { ArrowLeftRightIcon, SendIcon, XIcon } from 'lucide-react'
+import { ArrowLeftRightIcon, SendIcon, XIcon } from '@taut/ui/components/icons'
 import type { Handover, HandoverStatus } from '@taut/contract'
 
 import { Button } from '@taut/ui/components/button'
@@ -111,6 +111,7 @@ function HandoverCard({
     <li className="rounded-lg border p-4">
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <EntityAvatar
+          memberId={from?.id}
           avatar={from?.avatar ?? { kind: 'emoji', value: '🤖' }}
           kind="agent"
           face={from?.face}

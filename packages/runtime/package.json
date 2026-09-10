@@ -17,7 +17,7 @@
     "lint": "eslint --cache .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build:image": "pnpm --filter @taut/taut-mcp build && cp ../taut-mcp/dist/mcp.js docker/mcp.js && cp ../taut-mcp/dist/cli.js docker/cli.js && docker build -f docker/agent.Dockerfile -t taut/agent:latest docker",
+    "build:image": "docker build -f docker/agent.Dockerfile -t taut/agent:latest ../..",
     "clean": "rm -rf .turbo node_modules .eslintcache"
   },
   "dependencies": {

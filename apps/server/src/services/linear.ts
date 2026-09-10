@@ -150,14 +150,25 @@ const LinearProjectPayload = Schema.Struct({
   )
 })
 
+/** A person as every Linear payload here names one: id, maybe a name, maybe a face. */
+const LinearPersonPayload = Schema.Struct({
+  id: Schema.String,
+  name: nullableString,
+  avatarUrl: nullableString
+})
+
 /**
- * One issue of a project (D18). Every field nullable, like everything else Linear
- * answers: the mirror normalises, the payload just has to decode.
+ * One issue of a project (D18), widened into the whole ticket
+ * (docs/build-plan-issues.md D6). Every field nullable, like everything else Linear
+ * answers: the mirror normalises, the payload just has to decode — and the D6
+ * fields are asked for conditionally (`issueFields`), so a payload that arrives
+ * without any of them is the normal shape on an older API, not a broken sync.
  */
 const LinearIssuePayload = Schema.Struct({
   id: Schema.String,
   identifier: nullableString,
   title: nullableString,
+  description: nullableString,
   url: nullableString,
   priority: Schema.optional(Schema.NullOr(Schema.Number)),
   priorityLabel: nullableString,
@@ -176,16 +187,44 @@ const LinearIssuePayload = Schema.Struct({
       })
     )
   ),
-  assignee: Schema.optional(
-    Schema.NullOr(
-      Schema.Struct({ id: Schema.String, name: nullableString, avatarUrl: nullableString })
-    )
+  assignee: Schema.optional(Schema.NullOr(LinearPersonPayload)),
+  creator: Schema.optional(Schema.NullOr(LinearPersonPayload)),
+  projectMilestone: Schema.optional(
+    Schema.NullOr(Schema.Struct({ id: nullableString, name: nullableString }))
   ),
-  projectMilestone: Schema.optional(Schema.NullOr(Schema.Struct({ name: nullableString }))),
   labels: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
         nodes: Schema.Array(Schema.Struct({ name: nullableString, color: nullableString }))
+      })
+    )
+  ),
+  team: Schema.optional(Schema.NullOr(Schema.Struct({ id: nullableString, key: nullableString }))),
+  parent: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({ id: Schema.String, identifier: nullableString, title: nullableString })
+    )
+  ),
+  /** Only the ids: the count is all a card draws, and the list is its own read (D16). */
+  children: Schema.optional(
+    Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Schema.Struct({ id: Schema.String })) }))
+  ),
+  estimate: Schema.optional(Schema.NullOr(Schema.Number)),
+  completedAt: nullableString,
+  canceledAt: nullableString,
+  /** Present only on the single-issue read (D12); the bulk sync never asks for it. */
+  comments: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.Array(
+          Schema.Struct({
+            id: Schema.String,
+            body: nullableString,
+            url: nullableString,
+            createdAt: nullableString,
+            user: Schema.optional(Schema.NullOr(LinearPersonPayload))
+          })
+        )
       })
     )
   ),
@@ -271,11 +310,17 @@ const USERS_QUERY = `query TautUsers($after: String) {
 }`
 
 /**
- * The fields one issue is mirrored from (D18). `project { id }` comes back on
- * every node because the reconcile files issues under the project the mirror
- * already holds, rather than trusting the order they arrive in.
+ * The fields one issue is mirrored from (D18), widened to the whole ticket
+ * (docs/build-plan-issues.md D6). `project { id }` comes back on every node because
+ * the reconcile files issues under the project the mirror already holds, rather
+ * than trusting the order they arrive in.
+ *
+ * `withDetail` is the D6 half, asked for behind one flag exactly as the board
+ * fields are: GraphQL fails the whole document over a single field Linear has
+ * since renamed, so the caller tries once with it and once without, and a Linear
+ * that has none of it still mirrors everything it mirrored yesterday.
  */
-const ISSUE_FIELDS = `
+const issueFields = (withDetail: boolean) => `
       id
       identifier
       title
@@ -288,8 +333,13 @@ const ISSUE_FIELDS = `
       updatedAt
       state { id name type color position }
       assignee { id name avatarUrl }
-      projectMilestone { name }
       labels(first: 10) { nodes { name color } }
+      ${withDetail ? 'description' : ''}
+      ${withDetail ? 'parent { id identifier title }' : ''}
+      ${withDetail ? 'children(first: 100) { nodes { id } }' : ''}
+      ${withDetail ? 'team { id key }' : ''}
+      ${withDetail ? 'estimate creator { id name avatarUrl } completedAt canceledAt' : ''}
+      ${withDetail ? 'projectMilestone { id name }' : 'projectMilestone { name }'}
       project { id }`
 
 /**
@@ -298,17 +348,220 @@ const ISSUE_FIELDS = `
  * mirrors issues only as the contents of a project — an issue nobody filed under
  * one has no page here to appear on.
  */
-const ISSUES_QUERY = `query TautIssues($after: String) {
+const issuesQuery = (withDetail: boolean) => `query TautIssues($after: String) {
   issues(
     first: ${PAGE_SIZE}
     after: $after
     filter: { project: { null: false } }
   ) {
     pageInfo { hasNextPage endCursor }
-    nodes {${ISSUE_FIELDS}
+    nodes {${issueFields(withDetail)}
     }
   }
 }`
+
+/**
+ * One ticket, by Linear's UUID or by the identifier a human quotes
+ * (docs/build-plan-issues.md D15) — Linear's `issue(id:)` takes either, so this is
+ * one document and not two.
+ *
+ * `comments` rides along because the only reason to read one issue live is the
+ * activity feed, and a second round trip for the comments would double the wait
+ * for a page that is already asking Linear twice (D12, D13).
+ */
+const issueQuery = (withDetail: boolean) => `query TautIssue($id: String!) {
+  issue(id: $id) {${issueFields(withDetail)}
+    comments(first: 100) {
+      nodes { id body url createdAt user { id name avatarUrl } }
+    }
+  }
+}`
+
+const IssuePayload = Schema.Struct({
+  issue: Schema.optional(Schema.NullOr(LinearIssuePayload))
+})
+
+/**
+ * D2: change one ticket and read back the issue Linear now holds, in the same
+ * round trip. The input is a variable rather than an inlined literal so that the
+ * *caller* decides what is in it: an absent field is never sent, and an explicit
+ * `null` is sent as `null` and clears the value — a distinction that only survives
+ * if the object is built in TypeScript and handed over whole.
+ */
+const updateIssueMutation = (withDetail: boolean) => `mutation TautUpdateIssue(
+  $id: String!
+  $input: IssueUpdateInput!
+) {
+  issueUpdate(id: $id, input: $input) {
+    success
+    issue {${issueFields(withDetail)}
+    }
+  }
+}`
+
+const UpdatePayload = Schema.Struct({
+  issueUpdate: Schema.Struct({
+    success: Schema.Boolean,
+    issue: Schema.optional(Schema.NullOr(LinearIssuePayload))
+  })
+})
+
+/**
+ * D5: `issueDelete` is Linear's own Delete — the ticket goes to the trash and is
+ * restorable for 30 days. Deliberately not `issueArchive`, which is a different
+ * word in Linear's UI for a different thing, and not something a human clicking
+ * Delete in Taut asked for.
+ */
+const DELETE_ISSUE_MUTATION = `mutation TautDeleteIssue($id: String!) {
+  issueDelete(id: $id) { success }
+}`
+
+const DeletePayload = Schema.Struct({
+  issueDelete: Schema.Struct({ success: Schema.Boolean })
+})
+
+/**
+ * D13: Linear's own history for one ticket, read live and never stored. The
+ * from/to pairs are deliberately the conservative set — the ones that have been in
+ * Linear's schema longest — because one field Linear has since renamed fails the
+ * whole document, and a feed that says "could not be read" is worse than a feed
+ * missing a row about an estimate.
+ */
+const ISSUE_HISTORY_QUERY = `query TautIssueHistory($id: String!) {
+  issue(id: $id) {
+    history(first: 100) {
+      nodes {
+        id
+        createdAt
+        actor { id name avatarUrl }
+        fromState { name }
+        toState { name }
+        fromAssignee { name }
+        toAssignee { name }
+        fromPriority
+        toPriority
+        fromTitle
+        toTitle
+        fromDueDate
+        toDueDate
+        fromEstimate
+        toEstimate
+        fromParent { identifier }
+        toParent { identifier }
+        fromProject { name }
+        toProject { name }
+        addedLabels { name }
+        removedLabels { name }
+        archived
+        updatedDescription
+      }
+    }
+  }
+}`
+
+const HistoryNodePayload = Schema.Struct({
+  id: Schema.String,
+  createdAt: nullableString,
+  actor: Schema.optional(Schema.NullOr(LinearPersonPayload)),
+  fromState: Schema.optional(Schema.NullOr(Schema.Struct({ name: nullableString }))),
+  toState: Schema.optional(Schema.NullOr(Schema.Struct({ name: nullableString }))),
+  fromAssignee: Schema.optional(Schema.NullOr(Schema.Struct({ name: nullableString }))),
+  toAssignee: Schema.optional(Schema.NullOr(Schema.Struct({ name: nullableString }))),
+  fromPriority: Schema.optional(Schema.NullOr(Schema.Number)),
+  toPriority: Schema.optional(Schema.NullOr(Schema.Number)),
+  fromTitle: nullableString,
+  toTitle: nullableString,
+  fromDueDate: nullableString,
+  toDueDate: nullableString,
+  fromEstimate: Schema.optional(Schema.NullOr(Schema.Number)),
+  toEstimate: Schema.optional(Schema.NullOr(Schema.Number)),
+  fromParent: Schema.optional(Schema.NullOr(Schema.Struct({ identifier: nullableString }))),
+  toParent: Schema.optional(Schema.NullOr(Schema.Struct({ identifier: nullableString }))),
+  fromProject: Schema.optional(Schema.NullOr(Schema.Struct({ name: nullableString }))),
+  toProject: Schema.optional(Schema.NullOr(Schema.Struct({ name: nullableString }))),
+  addedLabels: Schema.optional(
+    Schema.NullOr(Schema.Array(Schema.Struct({ name: nullableString })))
+  ),
+  removedLabels: Schema.optional(
+    Schema.NullOr(Schema.Array(Schema.Struct({ name: nullableString })))
+  ),
+  archived: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  updatedDescription: Schema.optional(Schema.NullOr(Schema.Boolean))
+})
+
+const HistoryPayload = Schema.Struct({
+  issue: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({ history: Schema.Struct({ nodes: Schema.Array(HistoryNodePayload) }) })
+    )
+  )
+})
+
+/** D11: a Taut reply, pushed out as a comment on the ticket it was said about. */
+const COMMENT_CREATE_MUTATION = `mutation TautCreateComment($issueId: String!, $body: String!) {
+  commentCreate(input: { issueId: $issueId, body: $body }) {
+    success
+    comment { id url createdAt }
+  }
+}`
+
+const CommentCreatePayload = Schema.Struct({
+  commentCreate: Schema.Struct({
+    success: Schema.Boolean,
+    comment: Schema.optional(
+      Schema.NullOr(
+        Schema.Struct({ id: Schema.String, url: nullableString, createdAt: nullableString })
+      )
+    )
+  })
+})
+
+/**
+ * D14: the pick-lists the issue editors need, read live and never mirrored. Scoped
+ * to the ticket's *team*, because that is what a workflow state and a label belong
+ * to — a workspace-wide state list would offer states the ticket cannot be moved
+ * into. The milestones come from the project and the projects from the workspace,
+ * which is exactly how far each of those choices reaches.
+ */
+const TEAM_OPTIONS_QUERY = `query TautIssueOptions($teamId: String!, $projectId: String!) {
+  team(id: $teamId) {
+    states(first: 100) { nodes { id name type color position } }
+    labels(first: 100) { nodes { id name color } }
+    members(first: 100) { nodes { id name avatarUrl } }
+  }
+  project(id: $projectId) {
+    projectMilestones(first: 100) { nodes { id name } }
+  }
+  projects(first: ${PAGE_SIZE}) { nodes { id name } }
+}`
+
+const OptionsPayload = Schema.Struct({
+  team: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        states: Schema.Struct({ nodes: Schema.Array(LinearStatusPayload) }),
+        labels: Schema.Struct({
+          nodes: Schema.Array(
+            Schema.Struct({ id: Schema.String, name: Schema.String, color: nullableString })
+          )
+        }),
+        members: Schema.Struct({ nodes: Schema.Array(LinearPersonPayload) })
+      })
+    )
+  ),
+  project: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        projectMilestones: Schema.Struct({
+          nodes: Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String }))
+        })
+      })
+    )
+  ),
+  projects: Schema.Struct({
+    nodes: Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String }))
+  })
+})
 
 /**
  * D21: the second mutation Taut sends Linear, and the first one an *agent* can
@@ -321,24 +574,18 @@ const ISSUES_QUERY = `query TautIssues($after: String) {
  * instead: the ticket lands in their Linear inbox, which is the outcome that
  * matters, and the description says which agent filed it and who asked.
  */
-const CREATE_ISSUE_MUTATION = `mutation TautCreateIssue(
-  $teamId: String!
-  $projectId: String!
-  $title: String!
-  $description: String
-  $assigneeId: String
-  $priority: Int
+/**
+ * The input is a variable now (docs/build-plan-issues.md D1): a human filing a
+ * ticket from the issue page picks a state, labels, a milestone and a due date,
+ * and none of those can be an inlined literal if an absent one is to stay absent.
+ * The agent path (D21) sends the same three fields it always did.
+ */
+const createIssueMutation = (withDetail: boolean) => `mutation TautCreateIssue(
+  $input: IssueCreateInput!
 ) {
-  issueCreate(input: {
-    teamId: $teamId
-    projectId: $projectId
-    title: $title
-    description: $description
-    assigneeId: $assigneeId
-    priority: $priority
-  }) {
+  issueCreate(input: $input) {
     success
-    issue {${ISSUE_FIELDS}
+    issue {${issueFields(withDetail)}
     }
   }
 }`
@@ -407,6 +654,8 @@ export interface LinearIssue {
   readonly projectLinearId: string
   readonly identifier: string
   readonly title: string
+  /** Everything from here down arrives only when `withDetail` was asked for (D6). */
+  readonly description: string | undefined
   readonly stateId: string
   readonly stateName: string
   readonly stateType: string
@@ -417,13 +666,115 @@ export interface LinearIssue {
   readonly assigneeId: string | undefined
   readonly assigneeName: string | undefined
   readonly assigneeAvatarUrl: string | undefined
+  readonly creatorId: string | undefined
+  readonly creatorName: string | undefined
+  readonly creatorAvatarUrl: string | undefined
   readonly labels: ReadonlyArray<{ readonly name: string; readonly color: string | undefined }>
+  readonly teamId: string | undefined
+  readonly teamKey: string | undefined
   readonly milestoneName: string | undefined
+  readonly milestoneId: string | undefined
   readonly dueDate: string | undefined
+  readonly estimate: number | undefined
+  readonly parentLinearId: string | undefined
+  readonly parentIdentifier: string | undefined
+  readonly parentTitle: string | undefined
+  readonly subIssueCount: number
   readonly url: string
   readonly sortOrder: number
   readonly createdAt: string | undefined
   readonly updatedAt: string | undefined
+  readonly completedAt: string | undefined
+  readonly canceledAt: string | undefined
+}
+
+/**
+ * One comment on a ticket, as Linear holds it (docs/build-plan-issues.md D11).
+ * `authorLinearId` is the whole point: whether this becomes a Taut message or
+ * stays a read-only card in the Activity list turns on whether that id maps to a
+ * Taut human, and nothing else.
+ */
+export interface LinearIssueComment {
+  readonly linearId: string
+  readonly body: string
+  readonly authorLinearId: string | undefined
+  readonly authorName: string | undefined
+  readonly authorAvatarUrl: string | undefined
+  readonly createdAt: string | undefined
+  readonly url: string
+}
+
+/** One issue plus the comments read in the same round trip (D12). */
+export interface LinearIssueDetail {
+  readonly issue: LinearIssue
+  readonly comments: ReadonlyArray<LinearIssueComment>
+}
+
+/**
+ * One entry of Linear's history, already rendered into Linear's own words (D13).
+ * The sentence is composed here rather than in the browser because only this
+ * frame ever sees the from/to pair — the client gets the sentence, not the diff.
+ */
+export interface LinearHistoryEvent {
+  readonly linearId: string
+  readonly at: string
+  readonly actorLinearId: string | undefined
+  readonly actorName: string | undefined
+  readonly actorAvatarUrl: string | undefined
+  readonly kind: string
+  readonly summary: string
+}
+
+/** The pick-lists one issue's editors need, read live (D14). */
+export interface LinearIssueOptions {
+  readonly states: ReadonlyArray<LinearStatus>
+  readonly labels: ReadonlyArray<{
+    readonly id: string
+    readonly name: string
+    readonly color: string | undefined
+  }>
+  readonly members: ReadonlyArray<{
+    readonly linearId: string
+    readonly name: string
+    readonly avatarUrl: string | undefined
+  }>
+  readonly milestones: ReadonlyArray<{ readonly id: string; readonly name: string }>
+  readonly projects: ReadonlyArray<{ readonly id: string; readonly name: string }>
+}
+
+/**
+ * A change to one ticket, on its way to `issueUpdate` (D2). Three states per
+ * field and all three matter: absent is "leave it alone", `null` is "clear it",
+ * and a value is a value. That is why nothing here is optional-with-undefined —
+ * `undefined` would collapse the first two into one.
+ */
+export interface LinearIssueUpdate {
+  readonly title?: string
+  readonly description?: string | null
+  readonly stateId?: string
+  readonly priority?: number
+  readonly assigneeId?: string | null
+  readonly labelIds?: ReadonlyArray<string>
+  readonly projectMilestoneId?: string | null
+  readonly dueDate?: string | null
+  readonly estimate?: number | null
+  readonly parentId?: string | null
+  readonly projectId?: string
+}
+
+/** A new ticket, on its way to `issueCreate` (D1). The team and project are Taut's, never the caller's. */
+export interface LinearIssueCreate {
+  readonly teamId: string
+  readonly projectLinearId: string
+  readonly title: string
+  readonly description: string | undefined
+  readonly stateId: string | undefined
+  readonly priority: number | undefined
+  readonly assigneeId: string | undefined
+  readonly labelIds: ReadonlyArray<string> | undefined
+  readonly milestoneId: string | undefined
+  readonly dueDate: string | undefined
+  readonly parentId: string | undefined
 }
 
 /** One board column, as the workspace defines it (D13). */
@@ -579,16 +930,129 @@ const normaliseIssue = (node: typeof LinearIssuePayload.Type): LinearIssue | und
     assigneeId: orUndefined(node.assignee?.id),
     assigneeName: orUndefined(node.assignee?.name),
     assigneeAvatarUrl: orUndefined(node.assignee?.avatarUrl),
+    creatorId: orUndefined(node.creator?.id),
+    creatorName: orUndefined(node.creator?.name),
+    creatorAvatarUrl: orUndefined(node.creator?.avatarUrl),
+    description: orUndefined(node.description),
     labels: (node.labels?.nodes ?? [])
       .map((label) => ({ name: orUndefined(label.name) ?? '', color: orUndefined(label.color) }))
       .filter((label) => label.name !== ''),
+    teamId: orUndefined(node.team?.id),
+    teamKey: orUndefined(node.team?.key),
     milestoneName: orUndefined(node.projectMilestone?.name),
+    milestoneId: orUndefined(node.projectMilestone?.id),
     dueDate: orUndefined(node.dueDate),
+    estimate: orUndefined(node.estimate),
+    parentLinearId: orUndefined(node.parent?.id),
+    parentIdentifier: orUndefined(node.parent?.identifier),
+    parentTitle: orUndefined(node.parent?.title),
+    // Absent means "Linear was not asked" as often as "there are none", and the
+    // page draws no sub-issue section either way — exactly as Linear's own does.
+    subIssueCount: node.children?.nodes.length ?? 0,
     url: orUndefined(node.url) ?? LINEAR_WEB,
     sortOrder: node.sortOrder ?? 0,
     createdAt: orUndefined(node.createdAt),
-    updatedAt: orUndefined(node.updatedAt)
+    updatedAt: orUndefined(node.updatedAt),
+    completedAt: orUndefined(node.completedAt),
+    canceledAt: orUndefined(node.canceledAt)
   }
+}
+
+/** Linear's comment nodes as the shape the reconcile decides about (D11, D12). */
+const normaliseComments = (
+  node: typeof LinearIssuePayload.Type
+): ReadonlyArray<LinearIssueComment> =>
+  (node.comments?.nodes ?? []).map((comment) => ({
+    linearId: comment.id,
+    body: orUndefined(comment.body) ?? '',
+    authorLinearId: orUndefined(comment.user?.id),
+    authorName: orUndefined(comment.user?.name),
+    authorAvatarUrl: orUndefined(comment.user?.avatarUrl),
+    createdAt: orUndefined(comment.createdAt),
+    // A comment with no URL of its own still has a ticket to point at; the caller
+    // fills that in, because only it knows the issue's URL.
+    url: orUndefined(comment.url) ?? ''
+  }))
+
+/** Linear's five priority words, so a history line reads the way Linear's does. */
+const PRIORITY_WORDS = ['No priority', 'Urgent', 'High', 'Medium', 'Low'] as const
+
+const priorityWord = (value: number | null | undefined): string =>
+  PRIORITY_WORDS[priorityOf(value)] ?? 'No priority'
+
+/**
+ * One history node in Linear's own words (D13): `moved from Todo to In progress`,
+ * `assigned to Ana`, `added label Chore`.
+ *
+ * The order of the checks *is* the priority: a node can carry several from/to
+ * pairs at once (Linear batches one edit's changes into one node), and the feed
+ * wants the one thing that reads as what happened, not a list of every column
+ * that moved. Anything Taut does not recognise renders as `changed the issue`
+ * rather than not rendering — a feed that silently drops a row is a feed that
+ * cannot be trusted about the rows it does show.
+ */
+export const renderHistory = (
+  node: typeof HistoryNodePayload.Type
+): { readonly kind: string; readonly summary: string } => {
+  const added = (node.addedLabels ?? [])
+    .map((l) => orUndefined(l.name))
+    .filter((n) => n !== undefined)
+  const removed = (node.removedLabels ?? [])
+    .map((l) => orUndefined(l.name))
+    .filter((n) => n !== undefined)
+
+  const toState = orUndefined(node.toState?.name)
+  if (toState !== undefined) {
+    const from = orUndefined(node.fromState?.name)
+    return {
+      kind: 'state',
+      summary: from === undefined ? `moved to ${toState}` : `moved from ${from} to ${toState}`
+    }
+  }
+  const toAssignee = orUndefined(node.toAssignee?.name)
+  if (toAssignee !== undefined) return { kind: 'assignee', summary: `assigned to ${toAssignee}` }
+  // Only an *un*assignment has a from with no to, so this cannot swallow the case above.
+  const fromAssignee = orUndefined(node.fromAssignee?.name)
+  if (fromAssignee !== undefined) {
+    return { kind: 'assignee', summary: `unassigned ${fromAssignee}` }
+  }
+  if (added.length > 0) {
+    return { kind: 'label', summary: `added label ${added.join(', ')}` }
+  }
+  if (removed.length > 0) {
+    return { kind: 'label', summary: `removed label ${removed.join(', ')}` }
+  }
+  if (node.toPriority !== undefined && node.toPriority !== null) {
+    return {
+      kind: 'priority',
+      summary: `set priority to ${priorityWord(node.toPriority)}`
+    }
+  }
+  const toTitle = orUndefined(node.toTitle)
+  if (toTitle !== undefined) return { kind: 'title', summary: `renamed it to "${toTitle}"` }
+  const toProject = orUndefined(node.toProject?.name)
+  if (toProject !== undefined) return { kind: 'project', summary: `moved it to ${toProject}` }
+  const toParent = orUndefined(node.toParent?.identifier)
+  if (toParent !== undefined)
+    return { kind: 'parent', summary: `made it a sub-issue of ${toParent}` }
+  const fromParent = orUndefined(node.fromParent?.identifier)
+  if (fromParent !== undefined) {
+    return { kind: 'parent', summary: `removed it from under ${fromParent}` }
+  }
+  const toDueDate = orUndefined(node.toDueDate)
+  if (toDueDate !== undefined)
+    return { kind: 'dueDate', summary: `set the due date to ${toDueDate}` }
+  if (orUndefined(node.fromDueDate) !== undefined) {
+    return { kind: 'dueDate', summary: 'removed the due date' }
+  }
+  if (node.toEstimate !== undefined && node.toEstimate !== null) {
+    return { kind: 'estimate', summary: `set the estimate to ${node.toEstimate}` }
+  }
+  if (node.archived === true) return { kind: 'archived', summary: 'archived it' }
+  if (node.updatedDescription === true) {
+    return { kind: 'description', summary: 'updated the description' }
+  }
+  return { kind: 'other', summary: 'changed the issue' }
 }
 
 export class Linear extends Effect.Service<Linear>()('Linear', {
@@ -902,35 +1366,63 @@ export class Linear extends Effect.Service<Linear>()('Linear', {
      * version that refuses this document answers nothing here, and the caller
      * treats that as "no issues yet" rather than as a broken sync (D20).
      */
+    /**
+     * The D6 fields, once, and then without them (docs/build-plan-issues.md D6).
+     *
+     * Exactly the bargain the project sync makes with the board fields: one flag,
+     * one retry. `description`, `parent`, `children`, `team`, `estimate` and the
+     * timestamps are the newest things this file asks Linear for, and an API
+     * version that has none of them must still mirror what it mirrored yesterday
+     * rather than failing the whole document over one name.
+     */
+    const oneRetryWithoutDetail = <A>(
+      what: string,
+      run: (detail: boolean) => Effect.Effect<A, LinearFailure>
+    ): Effect.Effect<A, LinearFailure> =>
+      run(true).pipe(
+        Effect.catchAll((error) =>
+          Effect.logWarning(
+            `linear: retrying ${what} without the ticket detail (${error.reason})`
+          ).pipe(Effect.zipRight(run(false)))
+        )
+      )
+
+    const issuePages = (
+      apiKey: string,
+      detail: boolean
+    ): Effect.Effect<ReadonlyArray<LinearIssue>, LinearFailure> =>
+      Effect.gen(function* () {
+        const document = issuesQuery(detail)
+        const collected: Array<LinearIssue> = []
+        let after: string | undefined = undefined
+
+        for (let page = 0; page < MAX_ISSUE_PAGES; page++) {
+          const payload: typeof IssuesPayload.Type = yield* call(
+            apiKey,
+            document,
+            after === undefined ? {} : { after },
+            IssuesPayload,
+            'list the project issues'
+          )
+          for (const node of payload.issues.nodes) {
+            const issue = normaliseIssue(node)
+            if (issue !== undefined) collected.push(issue)
+          }
+          if (!payload.issues.pageInfo.hasNextPage) break
+          const cursor: string | undefined = orUndefined(payload.issues.pageInfo.endCursor)
+          if (cursor === undefined) break
+          after = cursor
+        }
+
+        return collected
+      })
+
     const issues = (
       companyId: CompanyId
     ): Effect.Effect<ReadonlyArray<LinearIssue>, LinearFailure> =>
       keyFor(companyId).pipe(
         Effect.flatMap((apiKey) =>
-          Effect.gen(function* () {
-            const collected: Array<LinearIssue> = []
-            let after: string | undefined = undefined
-
-            for (let page = 0; page < MAX_ISSUE_PAGES; page++) {
-              const payload: typeof IssuesPayload.Type = yield* call(
-                apiKey,
-                ISSUES_QUERY,
-                after === undefined ? {} : { after },
-                IssuesPayload,
-                'list the project issues'
-              )
-              for (const node of payload.issues.nodes) {
-                const issue = normaliseIssue(node)
-                if (issue !== undefined) collected.push(issue)
-              }
-              if (!payload.issues.pageInfo.hasNextPage) break
-              const cursor: string | undefined = orUndefined(payload.issues.pageInfo.endCursor)
-              if (cursor === undefined) break
-              after = cursor
-            }
-
-            return collected
-          })
+          oneRetryWithoutDetail('the issue sync', (detail) => issuePages(apiKey, detail))
         )
       )
 
@@ -939,35 +1431,46 @@ export class Linear extends Effect.Service<Linear>()('Linear', {
      * may — which team, which project, and which Linear person it is assigned to
      * are all resolved from the mirror before this is reached, so nothing an agent
      * typed reaches Linear as an id.
+     *
+     * Widened by docs/build-plan-issues.md D1: a human filing from the issue page
+     * also picks a state, labels, a milestone, a due date and a parent. Every one
+     * of them is left out of the input when the caller left it out, so Linear's own
+     * defaults still apply.
      */
     const createIssue = (
       companyId: CompanyId,
-      input: {
-        readonly teamId: string
-        readonly projectLinearId: string
-        readonly title: string
-        readonly description: string
-        readonly assigneeId: string | undefined
-        readonly priority: number | undefined
-      }
+      input: LinearIssueCreate
     ): Effect.Effect<LinearIssue, LinearFailure> =>
       keyFor(companyId).pipe(
-        Effect.flatMap((apiKey) =>
-          call(
+        Effect.flatMap((apiKey) => {
+          const fields: Record<string, unknown> = {
+            teamId: input.teamId,
+            projectId: input.projectLinearId,
+            title: input.title
+          }
+          if (input.description !== undefined) fields['description'] = input.description
+          if (input.stateId !== undefined) fields['stateId'] = input.stateId
+          if (input.priority !== undefined) fields['priority'] = input.priority
+          if (input.assigneeId !== undefined) fields['assigneeId'] = input.assigneeId
+          if (input.labelIds !== undefined) fields['labelIds'] = input.labelIds
+          if (input.milestoneId !== undefined) fields['projectMilestoneId'] = input.milestoneId
+          if (input.dueDate !== undefined) fields['dueDate'] = input.dueDate
+          if (input.parentId !== undefined) fields['parentId'] = input.parentId
+          /**
+           * The one call here that is *not* wrapped in `oneRetryWithoutDetail`: a
+           * retried create is a second ticket. A document Linear refuses is
+           * refused before it executes, but a timeout after it executed is not
+           * distinguishable from one before, and filing twice is a worse failure
+           * than filing not at all.
+           */
+          return call(
             apiKey,
-            CREATE_ISSUE_MUTATION,
-            {
-              teamId: input.teamId,
-              projectId: input.projectLinearId,
-              title: input.title,
-              description: input.description,
-              assigneeId: input.assigneeId ?? null,
-              priority: input.priority ?? null
-            },
+            createIssueMutation(true),
+            { input: fields },
             CreateIssuePayload,
             'create the issue'
           )
-        ),
+        }),
         Effect.flatMap((payload) => {
           const issue = payload.issueCreate.issue
           if (!payload.issueCreate.success || issue === undefined || issue === null) {
@@ -1009,6 +1512,232 @@ export class Linear extends Effect.Service<Linear>()('Linear', {
         })
       )
 
+    // ── one ticket (docs/build-plan-issues.md) ───────────────────────────────
+
+    /**
+     * D15: one ticket, live, with its comments. `ref` is Linear's UUID or the
+     * identifier a human quotes (`ENG-4636`) — Linear's own `issue(id:)` takes
+     * either, so there is one document here and not two.
+     */
+    const issue = (
+      companyId: CompanyId,
+      ref: string
+    ): Effect.Effect<LinearIssueDetail, LinearFailure> =>
+      keyFor(companyId).pipe(
+        Effect.flatMap((apiKey) =>
+          oneRetryWithoutDetail('the issue read', (detail) =>
+            call(apiKey, issueQuery(detail), { id: ref }, IssuePayload, 'read the issue')
+          )
+        ),
+        Effect.flatMap((payload) => {
+          const node = payload.issue
+          if (node === undefined || node === null) {
+            return Effect.fail(new LinearFailure({ reason: `Linear has no issue ${ref}` }))
+          }
+          const normalised = normaliseIssue(node)
+          return normalised === undefined
+            ? Effect.fail(
+                new LinearFailure({ reason: `issue ${ref} is not filed under a project` })
+              )
+            : Effect.succeed({ issue: normalised, comments: normaliseComments(node) })
+        })
+      )
+
+    /**
+     * D2: change one ticket and take the issue Linear answers with as the truth.
+     * The retry without the detail fields is safe here in a way it is not on a
+     * create: `issueUpdate` sets fields to values, so running it twice leaves the
+     * ticket exactly where running it once did.
+     */
+    const updateIssue = (
+      companyId: CompanyId,
+      linearIssueId: string,
+      input: LinearIssueUpdate
+    ): Effect.Effect<LinearIssue, LinearFailure> =>
+      keyFor(companyId).pipe(
+        Effect.flatMap((apiKey) => {
+          /**
+           * Field by field, and `null` survives: an absent key is never sent, so
+           * Linear leaves that field alone, while an explicit `null` is sent and
+           * clears it. Spreading the payload instead would send `undefined`s that
+           * JSON drops silently — the same wire, but by accident rather than on
+           * purpose.
+           */
+          const fields: Record<string, unknown> = {}
+          if (input.title !== undefined) fields['title'] = input.title
+          if (input.description !== undefined) fields['description'] = input.description
+          if (input.stateId !== undefined) fields['stateId'] = input.stateId
+          if (input.priority !== undefined) fields['priority'] = input.priority
+          if (input.assigneeId !== undefined) fields['assigneeId'] = input.assigneeId
+          if (input.labelIds !== undefined) fields['labelIds'] = input.labelIds
+          if (input.projectMilestoneId !== undefined) {
+            fields['projectMilestoneId'] = input.projectMilestoneId
+          }
+          if (input.dueDate !== undefined) fields['dueDate'] = input.dueDate
+          if (input.estimate !== undefined) fields['estimate'] = input.estimate
+          if (input.parentId !== undefined) fields['parentId'] = input.parentId
+          if (input.projectId !== undefined) fields['projectId'] = input.projectId
+          return oneRetryWithoutDetail('the issue update', (detail) =>
+            call(
+              apiKey,
+              updateIssueMutation(detail),
+              { id: linearIssueId, input: fields },
+              UpdatePayload,
+              'update the issue'
+            )
+          )
+        }),
+        Effect.flatMap((payload) => {
+          const node = payload.issueUpdate.issue
+          if (!payload.issueUpdate.success || node === undefined || node === null) {
+            return Effect.fail(new LinearFailure({ reason: 'Linear did not update the issue' }))
+          }
+          const normalised = normaliseIssue(node)
+          return normalised === undefined
+            ? Effect.fail(
+                new LinearFailure({ reason: 'Linear moved the issue out of every project' })
+              )
+            : Effect.succeed(normalised)
+        })
+      )
+
+    /** D5: Linear's own Delete — the trash, restorable for 30 days, not the archive. */
+    const deleteIssue = (
+      companyId: CompanyId,
+      linearIssueId: string
+    ): Effect.Effect<void, LinearFailure> =>
+      keyFor(companyId).pipe(
+        Effect.flatMap((apiKey) =>
+          call(
+            apiKey,
+            DELETE_ISSUE_MUTATION,
+            { id: linearIssueId },
+            DeletePayload,
+            'delete the issue'
+          )
+        ),
+        Effect.flatMap((payload) =>
+          payload.issueDelete.success
+            ? Effect.void
+            : Effect.fail(new LinearFailure({ reason: 'Linear did not delete the issue' }))
+        )
+      )
+
+    /**
+     * D13: Linear's history for one ticket, rendered into sentences here. Never
+     * stored: history is derived state only Linear can author, and a stale copy of
+     * it is worse than a spinner.
+     */
+    const issueHistory = (
+      companyId: CompanyId,
+      ref: string
+    ): Effect.Effect<ReadonlyArray<LinearHistoryEvent>, LinearFailure> =>
+      keyFor(companyId).pipe(
+        Effect.flatMap((apiKey) =>
+          call(apiKey, ISSUE_HISTORY_QUERY, { id: ref }, HistoryPayload, "read the issue's history")
+        ),
+        Effect.map((payload) =>
+          (payload.issue?.history.nodes ?? []).flatMap((node) => {
+            const at = orUndefined(node.createdAt)
+            // A history entry with no timestamp cannot be placed in a
+            // time-ordered feed, and a feed that guesses where it goes is worse
+            // than one that leaves it out.
+            if (at === undefined) return []
+            const rendered = renderHistory(node)
+            return [
+              {
+                linearId: node.id,
+                at,
+                actorLinearId: orUndefined(node.actor?.id),
+                actorName: orUndefined(node.actor?.name),
+                actorAvatarUrl: orUndefined(node.actor?.avatarUrl),
+                kind: rendered.kind,
+                summary: rendered.summary
+              }
+            ]
+          })
+        )
+      )
+
+    /**
+     * D11: a Taut reply, out to Linear as a comment on the ticket. The body
+     * already carries who said it — the caller prefixes `@handle via Taut —`,
+     * because a personal API key authors every comment as the key's owner and a
+     * comment that looks like the owner's is a lie about who said it.
+     */
+    const createComment = (
+      companyId: CompanyId,
+      linearIssueId: string,
+      body: string
+    ): Effect.Effect<string, LinearFailure> =>
+      keyFor(companyId).pipe(
+        Effect.flatMap((apiKey) =>
+          call(
+            apiKey,
+            COMMENT_CREATE_MUTATION,
+            { issueId: linearIssueId, body },
+            CommentCreatePayload,
+            'comment on the issue'
+          )
+        ),
+        Effect.flatMap((payload) => {
+          const comment = payload.commentCreate.comment
+          return !payload.commentCreate.success || comment === undefined || comment === null
+            ? Effect.fail(new LinearFailure({ reason: 'Linear did not take the comment' }))
+            : Effect.succeed(comment.id)
+        })
+      )
+
+    /**
+     * D14: the pick-lists, live. A team that Linear will not answer for is a
+     * failure rather than an empty list: an empty status picker reads as "this
+     * ticket has no states", which is never true and would have somebody
+     * reloading the page instead of telling their admin the key is too narrow.
+     */
+    const issueOptions = (
+      companyId: CompanyId,
+      teamId: string,
+      projectLinearId: string
+    ): Effect.Effect<LinearIssueOptions, LinearFailure> =>
+      keyFor(companyId).pipe(
+        Effect.flatMap((apiKey) =>
+          call(
+            apiKey,
+            TEAM_OPTIONS_QUERY,
+            { teamId, projectId: projectLinearId },
+            OptionsPayload,
+            'read the issue options'
+          )
+        ),
+        Effect.flatMap((payload) => {
+          const team = payload.team
+          if (team === undefined || team === null) {
+            return Effect.fail(new LinearFailure({ reason: `Linear has no team ${teamId}` }))
+          }
+          return Effect.succeed({
+            states: team.states.nodes.map((state, index) => ({
+              id: state.id,
+              name: state.name,
+              type: orUndefined(state.type) ?? 'unknown',
+              color: orUndefined(state.color),
+              position: state.position ?? index
+            })),
+            labels: team.labels.nodes.map((label) => ({
+              id: label.id,
+              name: label.name,
+              color: orUndefined(label.color)
+            })),
+            members: team.members.nodes.map((member) => ({
+              linearId: member.id,
+              name: orUndefined(member.name) ?? 'Unnamed',
+              avatarUrl: orUndefined(member.avatarUrl)
+            })),
+            milestones: payload.project?.projectMilestones.nodes ?? [],
+            projects: payload.projects.nodes
+          })
+        })
+      )
+
     /** D7: what the connection row remembers about the last attempt. */
     const recordSync = (
       companyId: CompanyId,
@@ -1031,6 +1760,13 @@ export class Linear extends Effect.Service<Linear>()('Linear', {
       issues,
       createIssue,
       moveProject,
+      // one ticket (docs/build-plan-issues.md)
+      issue,
+      updateIssue,
+      deleteIssue,
+      issueHistory,
+      createComment,
+      issueOptions,
       recordSync
     } as const
   }),

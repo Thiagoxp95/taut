@@ -29,6 +29,130 @@ body {
   display: none;
 }
 
+/* A horizontal disclosure: making room for run controls moves Aa to the
+ * right, while the formatting rail recedes. Grid keeps the motion local to
+ * this small toolbar; the textarea and Send never move during the morph. */
+.taut-composer-tools {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+}
+
+.taut-composer-agent {
+  display: grid;
+  grid-template-columns: 0fr;
+  flex-shrink: 0;
+  opacity: 0;
+  transform: translateX(-6px);
+  transition:
+    grid-template-columns 220ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 160ms cubic-bezier(0.23, 1, 0.32, 1),
+    transform 220ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.taut-composer-tools[data-agent='true'] .taut-composer-agent {
+  grid-template-columns: 1fr;
+  opacity: 1;
+  transform: none;
+}
+
+.taut-composer-agent-content {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.taut-composer-agent-content > div {
+  width: max-content;
+  max-width: min(17rem, 46cqi);
+  /* The clipping parent would cut a focus ring off, so the controls carry
+   * their own 4px of room and give it straight back: agent mode must not make
+   * the footer row taller, nor push its first control past the `Aa` toggle. */
+  padding: 4px;
+  margin: -4px 0 -4px -4px;
+}
+
+.taut-composer-formats {
+  position: relative;
+  min-width: 0;
+  max-width: 22rem;
+  flex: 1;
+  opacity: 0;
+  transform: translateX(-6px);
+  clip-path: inset(0 100% 0 0);
+  visibility: hidden;
+  transition:
+    opacity 160ms cubic-bezier(0.23, 1, 0.32, 1),
+    transform 220ms cubic-bezier(0.23, 1, 0.32, 1),
+    clip-path 220ms cubic-bezier(0.23, 1, 0.32, 1),
+    visibility 220ms;
+}
+
+.taut-composer-formats[data-expanded='true'] {
+  opacity: 1;
+  transform: none;
+  clip-path: inset(0);
+  visibility: visible;
+}
+
+.taut-composer-formats::before,
+.taut-composer-formats::after {
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.taut-composer-formats::before {
+  left: 0;
+  background: linear-gradient(to right, var(--background), transparent);
+}
+
+.taut-composer-formats::after {
+  right: 0;
+  background: linear-gradient(to left, var(--background), transparent);
+}
+
+.taut-composer-formats[data-fade-start='true']::before,
+.taut-composer-formats[data-fade-end='true']::after {
+  opacity: 1;
+}
+
+/* A thread panel can be much narrower than the viewport. Give its agent
+ * controls a full row so neither model nor effort gets squeezed out. */
+@container composer (max-width: 26rem) {
+  .taut-composer-footer[data-agent='true'] {
+    flex-wrap: wrap;
+  }
+
+  .taut-composer-footer[data-agent='true'] .taut-composer-tools {
+    flex-basis: 100%;
+  }
+
+  .taut-composer-footer[data-agent='true'] > button:last-child {
+    margin-left: auto;
+  }
+
+  .taut-composer-agent-content > div {
+    max-width: 70cqi;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .taut-composer-agent,
+  .taut-composer-formats,
+  .taut-composer-formats::before,
+  .taut-composer-formats::after {
+    transition: none;
+    transform: none;
+  }
+}
+
 /*
  * Inside the Electron shell the macOS titlebar is `hiddenInset`, so the app
  * owns the strip the traffic lights sit in. `.desktop` is set on <html> by
@@ -57,8 +181,8 @@ html.desktop .taut-shell [data-slot='sidebar-header'] {
 }
 
 html.desktop .taut-topbar {
-  height: calc(3.5rem + var(--taut-titlebar));
-  padding-top: var(--taut-titlebar);
+  min-height: calc(3.5rem + var(--taut-titlebar));
+  padding-top: calc(var(--taut-titlebar) + 0.5rem);
 }
 
 /*
@@ -215,5 +339,288 @@ html.desktop .taut-topbar {
   .taut-flash {
     animation: none;
     background-color: color-mix(in oklab, var(--primary) 14%, transparent);
+  }
+}
+
+/*
+ * The line under a reply that is still being written: what the agent is thinking, or the
+ * tool it just reached for (docs/build-plan-activity.md D5). Each new line replaces the
+ * last in place, so it fades up rather than snapping — a status line that hard-cuts every
+ * few hundred milliseconds reads as a glitch, not as progress.
+ */
+@keyframes taut-activity-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.taut-activity {
+  animation: taut-activity-in 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .taut-activity {
+    animation: none;
+  }
+
+  .taut-activity .shimmer {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
+/*
+ * The issue page's two columns (docs/build-plan-issues.md D15).
+ *
+ * Linear's issue view is a 720px content column beside a 240px properties rail,
+ * and it stacks the rail under the content at 900px. Those are Linear's numbers,
+ * not a breakpoint rounded to the nearest utility — see
+ * `routes/_app.issues.$issueId.tsx` for why the measurements are copied exactly.
+ *
+ * A *container* query rather than a media query: the page sits inside a sidebar
+ * that collapses, so how much room the ticket has is not the width of the
+ * window. A media query would stack a page that has plenty of room and squeeze
+ * one that has none.
+ */
+.taut-issue-layout {
+  container-type: inline-size;
+}
+
+.taut-issue-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 32px;
+}
+
+@container (min-width: 900px) {
+  .taut-issue-grid {
+    grid-template-columns: minmax(0, 720px) 240px;
+    gap: 40px;
+  }
+}
+
+/* The shell follows the visible viewport and leaves controls clear of device cutouts. */
+.taut-shell[data-slot='sidebar-wrapper'] {
+  height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+/* Touch users need a visible way to start a thread, react, and open message actions. */
+.taut-message-quick {
+  display: none;
+}
+
+@media (min-width: 640px) and (hover: hover) {
+  .taut-message-actions {
+    position: absolute;
+    top: 0;
+    right: 1rem;
+    z-index: 20;
+    margin-top: 0;
+    transform: translateY(-50%);
+    opacity: 0;
+    pointer-events: none;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .taut-message-quick {
+    display: inline-flex;
+  }
+
+  article:hover .taut-message-actions,
+  article:focus-within .taut-message-actions,
+  .taut-message-actions:has([data-state='open']) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* A thread stays mounted at its own reading width. The canvas enters from the
+ * right and translates the thread by the same distance, so drafts and scroll
+ * positions survive both directions without animating document layout.
+ * Both widths are set in pixels by the pane dividers (components/pane-layout.tsx);
+ * the values here are only what a first visit gets. */
+.taut-conversation {
+  --thread-width: 24rem;
+  --canvas-width: 32rem;
+}
+
+.taut-canvas-panel {
+  position: absolute;
+  z-index: 20;
+  inset: 0 0 0 auto;
+  width: var(--canvas-width);
+  border-left: 1px solid var(--border);
+  transform: translateX(100%);
+  visibility: hidden;
+  transition:
+    transform 240ms cubic-bezier(0.23, 1, 0.32, 1),
+    visibility 240ms;
+}
+
+.taut-canvas-panel[data-open='true'] {
+  transform: translateX(0);
+  visibility: visible;
+}
+
+.taut-thread-panel {
+  position: absolute;
+  z-index: 10;
+  inset: 0 0 0 auto;
+  transition: transform 240ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.taut-canvas-page {
+  position: relative;
+  width: 100%;
+  max-width: 210mm;
+  min-height: 100%;
+  aspect-ratio: 210 / 297;
+}
+
+.taut-canvas-page > iframe {
+  position: absolute;
+  inset: 0;
+}
+
+.taut-canvas-markdown {
+  font-size: 15px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.taut-canvas-markdown :is(p, ul, ol, pre, blockquote, table) {
+  margin-block: 1em;
+}
+.taut-canvas-markdown :is(h1, h2, h3, h4) {
+  margin: 1.25em 0 0.5em;
+  font-weight: 650;
+  line-height: 1.25;
+}
+.taut-canvas-markdown h1 {
+  font-size: 2em;
+}
+.taut-canvas-markdown h2 {
+  font-size: 1.5em;
+}
+.taut-canvas-markdown h3 {
+  font-size: 1.2em;
+}
+.taut-canvas-markdown :first-child {
+  margin-top: 0;
+}
+.taut-canvas-markdown ul {
+  list-style: disc;
+  padding-left: 1.5em;
+}
+.taut-canvas-markdown ol {
+  list-style: decimal;
+  padding-left: 1.5em;
+}
+.taut-canvas-markdown a {
+  color: #245ec7;
+  text-decoration: underline;
+}
+.taut-canvas-markdown pre {
+  overflow-x: auto;
+  background: #f5f5f5;
+  padding: 1em;
+  border-radius: 4px;
+}
+.taut-canvas-markdown code {
+  font-size: 0.9em;
+}
+.taut-canvas-markdown blockquote {
+  border-left: 3px solid #d4d4d4;
+  padding-left: 1em;
+  color: #525252;
+}
+.taut-canvas-markdown table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.taut-canvas-markdown :is(th, td) {
+  border: 1px solid #d4d4d4;
+  padding: 0.5em 0.75em;
+}
+.taut-canvas-markdown hr {
+  border-color: #d4d4d4;
+  margin-block: 2em;
+}
+
+@container conversation (min-width: 48rem) {
+  .taut-conversation[data-thread-open='true'] > .taut-channel-main {
+    margin-right: var(--thread-width);
+  }
+  .taut-conversation[data-canvas-open='true'] > .taut-thread-panel {
+    transform: translateX(calc(-1 * var(--canvas-width)));
+  }
+  /* All three columns share the row: the channel gives up exactly what the
+   * thread and the document take. */
+  .taut-conversation[data-canvas-open='true'][data-thread-open='true'] > .taut-channel-main {
+    margin-right: calc(var(--thread-width) + var(--canvas-width));
+  }
+  .taut-conversation[data-canvas-open='true'][data-thread-open='false'] > .taut-channel-main {
+    margin-right: var(--canvas-width);
+  }
+}
+
+/* Small windows keep both the reply composer and preview reachable. */
+@container conversation (width < 48rem) {
+  .taut-conversation > .taut-canvas-panel {
+    width: 100%;
+    top: 44%;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+  .taut-conversation[data-canvas-open='true'] > .taut-thread-panel,
+  .taut-conversation[data-canvas-open='true'][data-thread-open='false'] > .taut-channel-main {
+    bottom: 56%;
+  }
+  .taut-conversation[data-canvas-open='true'][data-thread-open='false'] > .taut-channel-main {
+    position: absolute;
+    inset: 0 0 56%;
+  }
+}
+
+.taut-document-workspace {
+  --canvas-width: 32rem;
+}
+.taut-document-content {
+  width: 100%;
+}
+.taut-document-workspace[data-canvas-open='true'] > .taut-document-content {
+  width: calc(100% - var(--canvas-width));
+}
+@container conversation (width < 48rem) {
+  .taut-document-workspace > .taut-canvas-panel {
+    width: 100%;
+    top: 44%;
+  }
+  .taut-document-workspace[data-canvas-open='true'] > .taut-document-content {
+    width: 100%;
+    height: 44%;
+    flex: none;
+  }
+}
+
+/* Stacked panes have no vertical border to drag. */
+@container conversation (width < 48rem) {
+  .taut-pane-handle {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .taut-canvas-panel,
+  .taut-thread-panel {
+    transition: none;
   }
 }

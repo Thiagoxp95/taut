@@ -12,6 +12,12 @@ export interface ExtraMcpServer {
   readonly env?: Readonly<Record<string, string>> | undefined
 }
 
+/** An HTTP MCP connector, optionally authenticated with static request headers. */
+export interface RemoteMcpServer {
+  readonly url: string
+  readonly headers?: Readonly<Record<string, string>> | undefined
+}
+
 export interface InjectOptions {
   /** `TAUT_URL` — the Taut server as seen from the agent's machine. */
   readonly url: string
@@ -28,6 +34,8 @@ export interface InjectOptions {
    * to `taut` by every builder below. A key equal to `taut` is ignored.
    */
   readonly extraServers?: Readonly<Record<string, ExtraMcpServer>> | undefined
+  /** Remote connectors follow stdio servers; existing stdio keys and `taut` cannot be shadowed. */
+  readonly remoteServers?: Readonly<Record<string, RemoteMcpServer>> | undefined
 }
 
 export const DEFAULT_COMMAND = 'node'
@@ -47,14 +55,19 @@ const commandOf = (o: InjectOptions) => ({
 })
 
 /** Extra servers in a stable order, never shadowing `taut`. */
-/** Extra servers in a stable order, never shadowing `taut`. */
 const extrasOf = (o: InjectOptions): ReadonlyArray<readonly [string, ExtraMcpServer]> =>
   Object.entries(o.extraServers ?? {}).filter(([key]) => key !== SERVER_KEY)
+
+const remotesOf = (o: InjectOptions): ReadonlyArray<readonly [string, RemoteMcpServer]> =>
+  Object.entries(o.remoteServers ?? {}).filter(
+    ([key]) => key !== SERVER_KEY && !Object.hasOwn(o.extraServers ?? {}, key)
+  )
 
 /** Server keys in emission order: `taut` first, then the extras. */
 export const serverKeys = (o: InjectOptions): ReadonlyArray<string> => [
   SERVER_KEY,
-  ...extrasOf(o).map(([key]) => key)
+  ...extrasOf(o).map(([key]) => key),
+  ...remotesOf(o).map(([key]) => key)
 ]
 
 // --- Claude Code -----------------------------------------------------------------
@@ -69,7 +82,7 @@ export interface ClaudeMcpServer {
 export interface ClaudeMcpConfig {
   readonly mcpServers: {
     readonly taut: ClaudeMcpServer & { readonly env: Readonly<Record<string, string>> }
-  } & Readonly<Record<string, ClaudeMcpServer>>
+  } & Readonly<Record<string, ClaudeMcpServer | (RemoteMcpServer & { readonly type: 'http' })>>
 }
 
 const withEnv = <T extends object>(
@@ -87,7 +100,8 @@ export const claudeMcpConfig = (o: InjectOptions): ClaudeMcpConfig => ({
         key,
         withEnv({ type: 'stdio' as const, command: s.command, args: [...s.args] }, s.env)
       ])
-    )
+    ),
+    ...Object.fromEntries(remotesOf(o).map(([key, s]) => [key, { type: 'http' as const, ...s }]))
   }
 })
 
@@ -96,7 +110,7 @@ export const claudeToolPattern = (serverKey: string): string => `mcp__${serverKe
 
 /** Allow-list patterns for the extra servers only (`['mcp__browser__*']`); pass to `claudeArgs`. */
 export const claudeAllowedToolsFor = (o: InjectOptions): ReadonlyArray<string> =>
-  extrasOf(o).map(([key]) => claudeToolPattern(key))
+  serverKeys(o).slice(1).map(claudeToolPattern)
 
 /** Full allow-list, `taut` first — what `McpOptions.allowedTools` in `@taut/runtime` expects. */
 export const claudeAllowedTools = (o: InjectOptions): ReadonlyArray<string> =>
@@ -125,6 +139,7 @@ export const claudeEnv: Readonly<Record<string, string>> = { CLAUDE_AUTO_BACKGRO
 // --- Codex ---------------------------------------------------------------------------
 
 const tomlString = (s: string) => JSON.stringify(s)
+const tomlKey = (s: string) => (/^[A-Za-z0-9_-]+$/.test(s) ? s : tomlString(s))
 const tomlArray = (xs: ReadonlyArray<string>) => `[${xs.map(tomlString).join(', ')}]`
 
 const codexServerToml = (
@@ -166,7 +181,25 @@ export const codexConfigToml = (o: InjectOptions): string => {
   const { command, args } = commandOf(o)
   const lines = [
     ...codexServerToml(SERVER_KEY, command, args, injectEnv(o), true),
-    ...extrasOf(o).flatMap(([key, s]) => codexServerToml(key, s.command, s.args, s.env, false))
+    ...extrasOf(o).flatMap(([key, s]) => codexServerToml(key, s.command, s.args, s.env, false)),
+    ...remotesOf(o).flatMap(([key, s]) => [
+      `[mcp_servers.${tomlKey(key)}]`,
+      `url = ${tomlString(s.url)}`,
+      'required = false',
+      'default_tools_approval_mode = "approve"',
+      'startup_timeout_sec = 30',
+      'tool_timeout_sec = 60',
+      '',
+      ...(s.headers === undefined
+        ? []
+        : [
+            `[mcp_servers.${tomlKey(key)}.http_headers]`,
+            ...Object.entries(s.headers).map(
+              ([name, value]) => `${tomlKey(name)} = ${tomlString(value)}`
+            ),
+            ''
+          ])
+    ])
   ]
   return lines.join('\n')
 }
@@ -182,7 +215,7 @@ export interface CursorMcpServer {
 export interface CursorMcpJson {
   readonly mcpServers: {
     readonly taut: CursorMcpServer & { readonly env: Readonly<Record<string, string>> }
-  } & Readonly<Record<string, CursorMcpServer>>
+  } & Readonly<Record<string, CursorMcpServer | RemoteMcpServer>>
 }
 
 /** `.cursor/mcp.json` in the task work dir. Extra servers follow `taut`. */
@@ -194,7 +227,8 @@ export const cursorMcpJson = (o: InjectOptions): CursorMcpJson => ({
         key,
         withEnv({ command: s.command, args: [...s.args] }, s.env)
       ])
-    )
+    ),
+    ...Object.fromEntries(remotesOf(o))
   }
 })
 
@@ -231,7 +265,17 @@ export interface OpencodeJson {
   readonly $schema: 'https://opencode.ai/config.json'
   readonly mcp: {
     readonly taut: OpencodeMcpServer & { readonly environment: Readonly<Record<string, string>> }
-  } & Readonly<Record<string, OpencodeMcpServer>>
+  } & Readonly<
+    Record<
+      string,
+      | OpencodeMcpServer
+      | (RemoteMcpServer & {
+          readonly type: 'remote'
+          readonly oauth: false
+          readonly enabled: true
+        })
+    >
+  >
 }
 
 /** `opencode.json` in the task work dir (or inline via `OPENCODE_CONFIG_CONTENT`). Extra servers follow `taut`. */
@@ -257,6 +301,12 @@ export const opencodeJson = (o: InjectOptions): OpencodeJson => {
                 environment: s.env,
                 enabled: true as const
               }
+        ])
+      ),
+      ...Object.fromEntries(
+        remotesOf(o).map(([key, s]) => [
+          key,
+          { type: 'remote' as const, ...s, oauth: false as const, enabled: true as const }
         ])
       )
     }

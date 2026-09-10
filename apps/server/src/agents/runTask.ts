@@ -43,7 +43,6 @@ import {
 import {
   type AgentEvent,
   type AgentEventOf,
-  BROWSER_MCP_ALLOWED_TOOL,
   BROWSER_MCP_SERVER_KEY,
   BROWSER_PATHS,
   BROWSER_WEB_BUILTIN_TOOLS,
@@ -59,6 +58,7 @@ import {
   adapterFor,
   browserCdpEndpoint,
   browserMcpSpec,
+  browserMcpBridgeSource,
   browserPromptLine,
   ensureBrowserDaemon,
   gitCredentialEnv,
@@ -72,15 +72,14 @@ import {
 } from '@taut/runtime'
 import {
   type InjectOptions,
-  SERVER_KEY as TAUT_MCP_SERVER_KEY,
   claudeMcpConfig,
-  claudeToolPattern,
+  claudeAllowedTools,
   codexConfigToml,
   cursorCliJsonFor,
   cursorMcpJson,
   opencodeJson
 } from '@taut/taut-mcp/inject'
-import { Cause, Effect, Either, Option, Redacted, Ref, Schedule, Schema, Stream } from 'effect'
+import { Cause, Effect, Either, Option, Redacted, Schedule, Schema, Stream } from 'effect'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { homedir, tmpdir } from 'node:os'
@@ -88,12 +87,14 @@ import { dirname, join, posix } from 'node:path'
 import { AppConfig } from '../config.js'
 import { findOne, nowIso } from '../db/sql.js'
 import { HttpNodeServer } from '../http/server.js'
+import { Bus } from '../realtime/bus.js'
 import { userHandle } from '../services/access.js'
 import { Agents } from '../services/agents.js'
 import { Attachments } from '../services/attachments.js'
 import { Channels } from '../services/channels.js'
 import { Messages } from '../services/messages.js'
 import { ModelCatalogs } from '../services/modelCatalog.js'
+import { Projects } from '../services/projects.js'
 import { Repositories } from '../services/repositories.js'
 import { ThreadContexts } from '../services/threadContext.js'
 import { type Emit, EventPublisher } from '../services/publisher.js'
@@ -105,7 +106,10 @@ import {
 import { type TaskInternal, Tasks } from '../services/tasks.js'
 import { Users } from '../services/users.js'
 import { Vault } from '../services/vault.js'
+import { describeTool, isBrowserTool, makeActivitySummary } from './activity.js'
+import { issueContextBlock } from './issueContext.js'
 import { CONTEXT_MESSAGES, renderPrompt, tautSection } from './prompt.js'
+import { makeReplyText } from './replyText.js'
 import { AgentSessions } from './sessions.js'
 import { TaskTokens } from './tokens.js'
 
@@ -113,8 +117,6 @@ import { TaskTokens } from './tokens.js'
 export const IDLE_TIMEOUT_MS = 5 * 60 * 1000
 /** Hard wall-clock cap per attempt. */
 export const HARD_TIMEOUT_MS = 60 * 60 * 1000
-/** Deltas are batched and flushed this often (≤ 10/s per task, agent-model §8). */
-export const DELTA_FLUSH_MS = 100
 
 export const RATE_LIMIT_RE =
   /\b429\b|rate.?limit|usage limit|out of (?:extra )?usage|quota|overloaded|too many requests|capacity/i
@@ -134,6 +136,13 @@ interface Seat {
  * per assistant message; the ring is a number that moves once a turn.
  */
 const CONTEXT_BROADCAST_MS = 1_000
+
+/**
+ * Floor between two activity broadcasts (docs/build-plan-activity.md D3). Fast enough that
+ * the line reads as live, slow enough that a run hammering `Read` in a loop does not become
+ * a strobe nobody can read a word of.
+ */
+const ACTIVITY_BROADCAST_MS = 400
 
 interface AttemptResult {
   readonly ok: boolean
@@ -190,7 +199,9 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
     const sql = yield* SqlClient.SqlClient
     const fs = yield* FileSystem.FileSystem
     const publisher = yield* EventPublisher
+    const bus = yield* Bus
     const messages = yield* Messages
+    const projects = yield* Projects
     const attachments = yield* Attachments
     const tasks = yield* Tasks
     const subscriptions = yield* Subscriptions
@@ -249,12 +260,20 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
       deflections: number
       /** D4: the agent reacted at least once this run, so silence is a real answer. */
       reacted: boolean
+      /** A tool already posted this turn's contribution in this conversation. */
+      sent: boolean
+      /** Completed teammate messages included in this turn's prompt or tool results. */
+      readonly read: Set<MessageId>
       /** D4: `taut_done("")` was accepted; the empty reply is taken back at the end. */
       withdraw: boolean
     }
 
     /** One entry per running task; created in `run`, removed in its `ensuring`. */
     const steering = new Map<TaskId, SteerState>()
+    // Queued mentions can be included in an earlier turn's fresh prompt. Keep receipts
+    // only for successful turns; failed/cancelled turns must not swallow a queued request.
+    const readByConversation = new Map<string, Set<MessageId>>()
+    const conversationKey = (t: TaskInternal): string => `${t.task.agentId}:${t.task.threadId}`
 
     /** Oldest dropped past this; a run that ignores its steer list does not grow a backlog. */
     const MAX_STEER_QUEUED = 20
@@ -290,6 +309,9 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
       if (state === undefined || state.pending.length === 0) return []
       const out = state.pending
       state.pending = []
+      for (const message of out) {
+        if (message.authorKind === 'agent') state.read.add(message.id)
+      }
       return out
     }
 
@@ -303,14 +325,19 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
       if (state !== undefined) state.reacted = true
     }
 
+    const noteSent = (taskId: TaskId, message: Message): void => {
+      const state = steering.get(taskId)
+      if (state !== undefined && sameConversation(message, state)) state.sent = true
+    }
+
     /**
-     * `taut_done("")` — the agent says its whole answer was a reaction. `true` when this run
-     * has actually reacted and the empty reply will therefore be withdrawn at the end (D4);
-     * `false` means it never reacted, and an empty summary keeps the old behaviour.
+     * An explicit silent completion: the contribution was already sent or was a reaction.
+     * Accept it only after that side effect exists; then even runtime closing narration
+     * must not create a second message.
      */
     const noteWithdraw = (taskId: TaskId): boolean => {
       const state = steering.get(taskId)
-      if (state === undefined || !state.reacted) return false
+      if (state === undefined || (!state.reacted && !state.sent)) return false
       state.withdraw = true
       return true
     }
@@ -343,8 +370,9 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
 
     // ── environment seen from the machine ──────────────────────────────────
 
-    const publicUrl = (): string => {
-      if (config.publicUrl !== undefined) return config.publicUrl.replace(/\/+$/, '')
+    const agentApiUrl = (): string => {
+      const configured = config.agentApiUrl ?? config.publicUrl
+      if (configured !== undefined) return configured.replace(/\/+$/, '')
       const address = server.address()
       const port = typeof address === 'object' && address !== null ? address.port : config.port
       const host = config.machineProvider === 'docker' ? 'host.docker.internal' : '127.0.0.1'
@@ -359,26 +387,62 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
       return bundled === undefined ? undefined : { command: process.execPath, args: [bundled] }
     }
 
-    // ── delta coalescing ────────────────────────────────────────────────────
+    // ── the running commentary ──────────────────────────────────────────────
 
-    const makeCoalescer = (t: TaskInternal) =>
+    /**
+     * What the agent is doing, while it is doing it (docs/build-plan-activity.md D1). One
+     * line at a time, replacing the last, straight onto the `Bus` — never the event log and
+     * never the message body, because none of it is worth keeping once the reply lands (D2).
+     *
+     * Throttled the way the context meter is: the newest line always wins, and a run that
+     * calls six tools in one tick broadcasts the sixth, not all six.
+     */
+    const makeActivity = (agent: Agent, t: TaskInternal) =>
       Effect.gen(function* () {
-        const pending = yield* Ref.make('')
-        const gate = yield* Effect.makeSemaphore(1)
-        const flush = gate.withPermits(1)(
-          Ref.getAndSet(pending, '').pipe(
-            Effect.flatMap((text) =>
-              messages.appendDelta(t.task.companyId, t.task.id, t.task.messageId, text)
-            ),
-            Effect.uninterruptible
-          )
-        )
+        let latest: { readonly kind: 'thinking' | 'tool'; readonly text: string } | undefined
+        let sent: string | undefined
+        let lastBroadcastAt = 0
+        let hasBrowser = false
+
+        const write = (line: { readonly kind: 'thinking' | 'tool'; readonly text: string }) => {
+          lastBroadcastAt = Date.now()
+          sent = line.text
+          return bus.publish({
+            _tag: 'Activity',
+            companyId: t.task.companyId,
+            taskId: t.task.id,
+            messageId: t.task.messageId,
+            channelId: t.task.channelId,
+            threadId: t.task.threadId,
+            agentId: agent.id,
+            kind: line.kind,
+            text: line.text,
+            browser: hasBrowser
+          })
+        }
+
+        /** Whatever the throttle is holding, if it is not what the client already has. */
+        const flush = Effect.suspend(() => {
+          const pending = latest
+          if (pending === undefined || pending.text === sent) return Effect.void
+          return write(pending)
+        })
+
         yield* Effect.forkScoped(
-          flush.pipe(Effect.repeat(Schedule.spaced(`${DELTA_FLUSH_MS} millis`)))
+          flush.pipe(Effect.repeat(Schedule.spaced(`${ACTIVITY_BROADCAST_MS} millis`)))
         )
+
         return {
-          push: (text: string) => Ref.update(pending, (p) => p + text),
-          flush
+          push: (kind: 'thinking' | 'tool', text: string, browser = false) => {
+            const startedBrowser = browser && !hasBrowser
+            hasBrowser ||= browser
+            if (text.length === 0 || (!startedBrowser && text === latest?.text)) return Effect.void
+            latest = { kind, text }
+            // Opening the live pane must not wait for a status-text throttle or deduplication.
+            return !startedBrowser && Date.now() - lastBroadcastAt < ACTIVITY_BROADCAST_MS
+              ? Effect.void
+              : write(latest)
+          }
         } as const
       })
 
@@ -487,6 +551,17 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
             : messages.since(agent.companyId, t.task.threadId, seenUpTo, CONTEXT_MESSAGES)
         ])
         yield* materialiseFor(agent.companyId, machine, [trigger, ...context])
+        const read = steering.get(t.task.id)?.read
+        for (const message of [trigger, ...context]) {
+          if (message.authorKind === 'agent' && message.status === 'sent') read?.add(message.id)
+        }
+        /**
+         * D17: the ticket this thread hangs off, when it is one. One indexed read
+         * of `project_issues.thread_message_id` per run — it answers nothing for
+         * every ordinary thread, which is the whole reason it can be asked
+         * unconditionally rather than guarded by a flag somebody has to set.
+         */
+        const ticket = yield* projects.issueForThread(agent.companyId, t.task.threadId)
         // A reply inside a thread this agent opened is the answer to its own question. The
         // errand that prompted it sits in a different thread, so without this the agent reads
         // the answer and stops there (docs/agent-model.md §9).
@@ -504,6 +579,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
         return renderPrompt({
           agentHandle: agent.handle,
           companyName,
+          ...(Option.isNone(ticket) ? {} : { issue: issueContextBlock(ticket.value) }),
           trigger,
           context,
           names: { handle, channel: channel.kind === 'dm' ? 'dm' : `#${channel.name}` },
@@ -537,6 +613,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
       // agent share one browser — and one profile dir, which Chromium will not open
       // twice. Without one, playwright-mcp launches its own, as it always did.
       const spec = browserMcpSpec({
+        follow: true,
         provider: provider.name,
         homeDir: machine.paths.home,
         ...(cdpEndpoint === undefined ? {} : { cdpEndpoint })
@@ -636,6 +713,12 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
             ),
           { discard: true }
         )
+        yield* fs
+          .writeFileString(
+            join(machine.paths.hostHome, BROWSER_PATHS.bridge),
+            browserMcpBridgeSource
+          )
+          .pipe(Effect.ignore)
         // A Chromium that died mid-task leaves its profile lock behind and the next launch
         // fails with "browser is already in use". Tasks of one agent never overlap (per-agent
         // semaphore) and the MCP server dies with the runtime, so at this point no browser
@@ -667,18 +750,29 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
       token: string,
       t: TaskInternal,
       fileGrants: ReadonlyArray<InstructionFileGrant>,
-      cdpEndpoint: string | undefined
-    ): Effect.Effect<McpWiring | undefined> =>
+      cdpEndpoint: string | undefined,
+      redactor: Redactor
+    ): Effect.Effect<McpWiring | undefined, string> =>
       Effect.gen(function* () {
+        const remoteServers = yield* agents.connectorsForRuntime(agent.id)
         const cmd = mcpCommand()
         if (cmd === undefined) {
+          if (Object.keys(remoteServers).length > 0) {
+            return yield* Effect.fail(
+              'Cannot load connectors: build @taut/taut-mcp or set TAUT_MCP_COMMAND'
+            )
+          }
           yield* Effect.logWarning(
             'taut MCP server not found (build @taut/taut-mcp or set TAUT_MCP_COMMAND); the agent runs without taut_* tools'
           )
           return undefined
         }
+        for (const server of Object.values(remoteServers)) {
+          for (const value of Object.values(server.headers)) redactor.add(value)
+        }
         const o: InjectOptions = {
-          url: publicUrl(),
+          remoteServers,
+          url: agentApiUrl(),
           token,
           taskId: t.task.id,
           threadId: t.task.threadId,
@@ -689,18 +783,14 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
         // claude-code `--allowedTools`: `mcp__taut__*`, plus `mcp__browser__*` and the built-in
         // `WebSearch` / `WebFetch` with browser access — headless `claude` denies every tool the
         // list does not name, and an agent denied `WebSearch` concludes it has no web at all.
-        const allowedTools: ReadonlyArray<string> = agent.browserAccess
-          ? [
-              claudeToolPattern(TAUT_MCP_SERVER_KEY),
-              BROWSER_MCP_ALLOWED_TOOL,
-              ...BROWSER_WEB_BUILTIN_TOOLS
-            ]
-          : [claudeToolPattern(TAUT_MCP_SERVER_KEY)]
+        const allowedTools: ReadonlyArray<string> = [
+          ...claudeAllowedTools(o),
+          ...(agent.browserAccess ? BROWSER_WEB_BUILTIN_TOOLS : [])
+        ]
         const put = (path: string, content: string) =>
-          machine.putFile(path, content).pipe(
-            Effect.tapError((e) => Effect.logWarning(`cannot write ${path}: ${e.message}`)),
-            Effect.ignore
-          )
+          machine
+            .putFile(path, content)
+            .pipe(Effect.mapError(() => 'Cannot write MCP connector configuration'))
         switch (agent.runtimeKind) {
           case 'claude-code': {
             const path = posix.join(cwd, '.taut', 'mcp.json')
@@ -712,7 +802,10 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
               posix.join(machine.paths.home, '.taut', 'codex', 'config.toml'),
               codexConfigToml(o)
             )
-            return { configPath: undefined, allowedTools }
+            return {
+              configPath: posix.join(machine.paths.home, '.taut', 'codex', 'config.toml'),
+              allowedTools
+            }
           case 'cursor':
             yield* put(
               posix.join(cwd, '.cursor', 'mcp.json'),
@@ -722,7 +815,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
               posix.join(cwd, '.cursor', 'cli.json'),
               JSON.stringify(cursorCliJsonFor(o), null, 2)
             )
-            return { configPath: undefined, allowedTools }
+            return { configPath: posix.join(cwd, '.cursor', 'mcp.json'), allowedTools }
           case 'opencode': {
             // Home dirs first: opencode has no `--add-dir`, so `skills/`, `memory/` and
             // `inbox/` reach it only through this block.
@@ -738,7 +831,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
                 2
               )
             )
-            return { configPath: undefined, allowedTools }
+            return { configPath: posix.join(cwd, 'opencode.json'), allowedTools }
           }
         }
       })
@@ -773,6 +866,8 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
         let lastBroadcastAt = 0
         let previousUsed = previous?.usedTokens ?? 0
         let compactedAt = previous?.compactedAt
+        let compacting = false
+        let awaitingCompactedSample = false
 
         /** A window that lost a fifth of its contents did not forget; it compacted (D9). */
         const COMPACTION_DROP = 0.8
@@ -798,6 +893,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
               totalTokens: carriedTotal + billedThisRun,
               model,
               compactsAutomatically: adapter.compactsAutomatically,
+              compacting,
               compactedAt
             })
             lastBroadcastAt = Date.now()
@@ -808,15 +904,36 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
             )
           )
 
+        const compaction = (active: boolean) => {
+          if (compacting === active) return Effect.void
+          compacting = active
+          if (!active) awaitingCompactedSample = true
+          // A lifecycle event bypasses the usage throttle, even before the first sample.
+          return write(
+            latest ?? {
+              type: 'context',
+              usedTokens: previous?.usedTokens ?? 0,
+              ...(previous?.maxTokens === undefined ? {} : { maxTokens: previous.maxTokens }),
+              ...(previous?.model === undefined ? {} : { model: previous.model })
+            }
+          )
+        }
+
         return {
+          compaction,
           /** Called for every `context` event the runtime emits. */
           sample: (event: AgentEventOf<'context'>) => {
-            if (previousUsed > 0 && event.usedTokens < previousUsed * COMPACTION_DROP) {
+            const dropped = previousUsed > 0 && event.usedTokens < previousUsed * COMPACTION_DROP
+            if (dropped) {
               compactedAt = nowIso()
             }
+            const flush = dropped || awaitingCompactedSample
+            awaitingCompactedSample = false
             previousUsed = event.usedTokens
             latest = event
-            return Date.now() - lastBroadcastAt < CONTEXT_BROADCAST_MS ? Effect.void : write(event)
+            return !flush && Date.now() - lastBroadcastAt < CONTEXT_BROADCAST_MS
+              ? Effect.void
+              : write(event)
           },
           /** Called once the run ends, so the final sample is never the one that got throttled. */
           settle: (billed: number) => {
@@ -835,15 +952,22 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
       built: BuiltCommand,
       seat: Seat,
       resumeSessionId: string | undefined,
-      coalescer: { readonly push: (text: string) => Effect.Effect<void> },
-      body: Ref.Ref<string>,
       redactor: Redactor,
       /** Set only when this task has repository worktrees; absent otherwise (D14). */
       gitAuth: { readonly url: string; readonly token: string } | undefined,
       /** The context meter, already throttled (docs/build-plan-context-meter.md D10). */
       meter: {
+        readonly compaction: (active: boolean) => Effect.Effect<void>
         readonly sample: (event: AgentEventOf<'context'>) => Effect.Effect<void>
         readonly settle: (billedTokens: number) => Effect.Effect<void>
+      },
+      /** The running commentary, already throttled (docs/build-plan-activity.md D3). */
+      activity: {
+        readonly push: (
+          kind: 'thinking' | 'tool',
+          text: string,
+          browser?: boolean
+        ) => Effect.Effect<void>
       }
     ): Effect.Effect<AttemptResult> =>
       Effect.gen(function* () {
@@ -854,6 +978,8 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
         let sessionId: string | undefined
         let billedTokens = 0
         let done: Extract<AgentEvent, { type: 'done' }> | undefined
+        const reply = makeReplyText()
+        const summarizeActivity = makeActivitySummary()
 
         const env: Record<string, string> = { ...built.env }
         if (seat.credential.kind === 'host-login') env['HOME'] = homedir()
@@ -869,20 +995,31 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
         }
 
         const handle = (event: AgentEvent): Effect.Effect<void> => {
+          reply.observe(event)
+          const summary = summarizeActivity(event)
           switch (event.type) {
-            case 'text_delta':
+            case 'text_delta': {
               sawText = true
-              return Ref.update(body, (b) => b + event.text).pipe(
-                Effect.zipRight(coalescer.push(event.text))
+              return summary === undefined ? Effect.void : activity.push('thinking', summary)
+            }
+            // Keep the last public summary visible between calls; never broadcast raw reasoning.
+            case 'thinking':
+              return Effect.void
+            case 'tool_use': {
+              return activity.push(
+                'tool',
+                describeTool(event.name, event.input),
+                isBrowserTool(event.name)
               )
-            case 'tool_use':
-              return config.showTools ? coalescer.push(`\n_(using ${event.name})_\n`) : Effect.void
+            }
             case 'session':
               sessionId = event.sessionId
               return Effect.void
             // Occupancy. The last one of the run is the one that counts (D2).
             case 'context':
               return meter.sample(event)
+            case 'compaction':
+              return meter.compaction(event.compacting)
             // The bill, which is a different quantity and accumulates (D1).
             case 'usage':
               billedTokens +=
@@ -923,7 +1060,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
               timeoutMs: HARD_TIMEOUT_MS
             }),
             handle
-          )
+          ).pipe(Effect.ensuring(Effect.suspend(() => meter.compaction(false))))
         )
         if (streamed._tag === 'Left') {
           const e = streamed.left
@@ -965,7 +1102,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
             resumeSessionId !== undefined &&
             (!sawText || RESUME_FAILED_RE.test(haystack)),
           sessionId,
-          summary: done?.summary
+          summary: reply.finish(ok, done?.summary)
         }
       })
 
@@ -1090,6 +1227,14 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
             : yield* messages.byId(companyId, t.triggerMessageId)
         if (Option.isNone(trigger))
           return yield* Effect.fail('the message that started this task was deleted')
+        if (
+          trigger.value.authorKind === 'agent' &&
+          readByConversation.get(conversationKey(t))?.has(trigger.value.id)
+        ) {
+          // Its question was already consumed in an earlier successful turn. Retain the
+          // task for trigger idempotency, but spend no model call and leave no empty bubble.
+          return yield* finishDone(configured, t, undefined, undefined, true)
+        }
 
         /**
          * What the message asked for wins over what the agent is configured with,
@@ -1150,7 +1295,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
         // env is untouched and the instruction file gains nothing — the task path is the one
         // it was before this feature existed (D14).
         const repoGrants = yield* repositories.grantsOf(agent.id)
-        const gitAuth = repoGrants.length === 0 ? undefined : { url: publicUrl(), token }
+        const gitAuth = repoGrants.length === 0 ? undefined : { url: agentApiUrl(), token }
         const prepared =
           gitAuth === undefined
             ? ([] as ReadonlyArray<PreparedRepo>)
@@ -1219,7 +1364,16 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
             cdpEndpoint = yield* localBrowserEndpoint(machine.paths.home)
           }
         }
-        const mcp = yield* writeMcpConfig(agent, machine, cwd, token, t, grants, cdpEndpoint)
+        const mcp = yield* writeMcpConfig(
+          agent,
+          machine,
+          cwd,
+          token,
+          t,
+          grants,
+          cdpEndpoint,
+          redactor
+        )
         yield* writeInstructionFile(
           agent,
           machine,
@@ -1248,9 +1402,8 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
           resume?.lastMessageId
         )
 
-        const coalescer = yield* makeCoalescer(t)
         const meter = yield* makeContextMeter(agent, t, channel.id)
-        const body = yield* Ref.make('')
+        const activity = yield* makeActivity(agent, t)
         let seatRetried = false
         let resumeRetried = false
         let lastSeat: Seat | undefined
@@ -1278,7 +1431,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
               : {
                   mcp: {
                     configPath: mcp.configPath,
-                    ...(agent.browserAccess ? { allowedTools: mcp.allowedTools } : {})
+                    allowedTools: mcp.allowedTools
                   }
                 }),
             // `inbox/`, `skills/` and `memory/` sit outside the work dir the runtime scopes
@@ -1298,11 +1451,10 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
             built,
             seat,
             resumeSessionId,
-            coalescer,
-            body,
             redactor,
             gitAuth,
-            meter
+            meter,
+            activity
           )
           if (result.sessionId !== undefined) {
             yield* sessions.set(
@@ -1312,23 +1464,25 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
               agent.runtimeKind,
               result.sessionId,
               // Everything up to this run's trigger is now in the runtime's own history (D7).
-              t.triggerMessageId ?? trigger.value.id
+              t.triggerMessageId ?? trigger.value.id,
+              agent.mandate
             )
           }
-          yield* coalescer.flush
           if (result.ok) {
-            const text = yield* Ref.get(body)
             const summary = doneSummaries.get(t.task.id)
-            const silent = text.trim().length === 0
-            // D4: withdraw only when the run really said nothing — no streamed text and no
-            // summary. Anything the runtime printed is kept, whatever `taut_done` asked for.
+            // An accepted empty completion is authoritative, including when the runtime
+            // narrates its tool use afterwards ("I reacted; no message was needed").
             const withdraw =
-              silent &&
               (steering.get(t.task.id)?.withdraw ?? false) &&
               (summary === undefined || summary.trim().length === 0)
-            // Nothing streamed → the `taut_done` summary, else the runtime's own final text.
-            const fallback = silent && !withdraw ? (summary ?? result.summary) : undefined
-            return yield* finishDone(agent, t, lastSeat, fallback, withdraw)
+            const fallback = withdraw ? undefined : (result.summary ?? summary)
+            yield* finishDone(agent, t, lastSeat, fallback, withdraw)
+            const key = conversationKey(t)
+            const read = readByConversation.get(key) ?? new Set<MessageId>()
+            for (const id of steering.get(t.task.id)?.read ?? []) read.add(id)
+            // Record only committed successful turns, with a bounded recent history.
+            readByConversation.set(key, new Set([...read].slice(-100)))
+            return
           }
           if (
             seat.subscription !== undefined &&
@@ -1404,6 +1558,8 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
           pending: [],
           deflections: 0,
           reacted: false,
+          sent: false,
+          read: new Set(),
           withdraw: false
         })
         return runOnce(t, redactor)
@@ -1448,6 +1604,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
       peekSteer,
       useDeflection,
       noteReaction,
+      noteSent,
       noteWithdraw
     } as const
   })

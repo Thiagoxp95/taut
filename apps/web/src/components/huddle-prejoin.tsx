@@ -7,7 +7,7 @@ import {
   VideoOffIcon,
   Volume2Icon,
   XIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { ChannelId } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 import {
@@ -347,6 +347,7 @@ export function HuddlePrejoin({
           {preview.stream === undefined ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
               <EntityAvatar
+                memberId={me?.id}
                 avatar={me?.avatar}
                 kind="user"
                 name={me?.name ?? 'You'}
@@ -395,7 +396,7 @@ export function HuddlePrejoin({
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <DeviceSelect
             icon={<MicIcon />}
             label="Microphone"

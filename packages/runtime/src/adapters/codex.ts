@@ -88,7 +88,7 @@ export const buildCodexCommand = (input: BuildCommandInput): BuiltCommand => {
 /**
  * `codex exec --json` events (best effort):
  * `thread.started{thread_id}` → session · `item.started|completed{item}` with item types
- * `agent_message{text}` → text_delta, `command_execution{command,aggregated_output,exit_code}`
+ * `agent_message{text}` → text_delta, `reasoning{text|summary}` → thinking, `command_execution{command,aggregated_output,exit_code}`
  * → tool_use/tool_result, `file_change{changes:[{path,kind}]}` → file_change,
  * `mcp_tool_call{server,tool,arguments,result}` → tool_use/tool_result ·
  * `turn.completed{usage}` → usage + context + done · `token_count{info}` → context (carries
@@ -116,9 +116,14 @@ export const parseCodexLine = (line: string): ReadonlyArray<AgentEvent> => {
       switch (item['type']) {
         case 'agent_message': {
           const text = str(item['text'])
-          return completed && text !== undefined ? [{ type: 'text_delta', text }] : []
+          return completed && text !== undefined
+            ? [{ type: 'text_delta', text, snapshot: true }]
+            : []
         }
-        case 'reasoning':
+        case 'reasoning': {
+          const text = str(item['text']) ?? str(item['summary'])
+          return text === undefined || text.length === 0 ? [] : [{ type: 'thinking', text }]
+        }
         case 'todo_list':
         case 'web_search':
           return []

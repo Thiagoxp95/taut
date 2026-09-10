@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { BotIcon, MailIcon, UserPlusIcon, UsersIcon, XIcon } from 'lucide-react'
+import { BotIcon, MailIcon, UserPlusIcon, UsersIcon, XIcon } from '@taut/ui/components/icons'
 import type { MembershipRole } from '@taut/contract'
 import { Badge } from '@taut/ui/components/badge'
 import { Button } from '@taut/ui/components/button'
@@ -35,15 +35,21 @@ function MemberRow({ member, canAdminister }: { member: DirectoryUser; canAdmini
   const setRole = useSetRole()
 
   return (
-    <li className="flex items-center gap-3 px-6 py-3">
-      <EntityAvatar avatar={member.avatar} name={member.name} presence={presence} size="lg" />
-      <div className="min-w-0 flex-1">
+    <li className="flex flex-wrap items-center gap-3 px-4 py-3 sm:px-6">
+      <EntityAvatar
+        memberId={member.id}
+        avatar={member.avatar}
+        name={member.name}
+        presence={presence}
+        size="lg"
+      />
+      <div className="min-w-0 flex-1 basis-32">
         <p className="truncate text-sm font-medium">
           {member.name} <span className="font-normal text-muted-foreground">@{member.handle}</span>
         </p>
         <p className="truncate text-xs text-muted-foreground">{member.email}</p>
       </div>
-      <span className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+      <span className="hidden items-center gap-1.5 text-xs text-muted-foreground @2xl/settings-card:flex">
         <PresenceDot presence={presence} />
         {presenceLabel(presence)}
       </span>
@@ -92,9 +98,16 @@ function AgentRow({
 }) {
   const presence = usePresence(agentId, 'idle')
   return (
-    <li className="flex items-center gap-3 px-6 py-3">
-      <EntityAvatar avatar={avatar} kind="agent" face={face} name={name} size="lg" />
-      <div className="min-w-0 flex-1">
+    <li className="flex flex-wrap items-center gap-3 px-4 py-3 sm:px-6">
+      <EntityAvatar
+        memberId={agentId}
+        avatar={avatar}
+        kind="agent"
+        face={face}
+        name={name}
+        size="lg"
+      />
+      <div className="min-w-0 flex-1 basis-32">
         <p className="truncate text-sm font-medium">
           {name} <span className="font-normal text-muted-foreground">@{handle}</span>
         </p>
@@ -184,9 +197,12 @@ function MembersRoute() {
                 ) : (
                   <ul className="divide-y">
                     {pending.map((invite) => (
-                      <li key={invite.id} className="flex items-center gap-3 px-6 py-3">
+                      <li
+                        key={invite.id}
+                        className="flex flex-wrap items-center gap-3 px-4 py-3 sm:px-6"
+                      >
                         <MailIcon className="size-4 shrink-0 text-muted-foreground" />
-                        <div className="min-w-0 flex-1">
+                        <div className="min-w-0 flex-1 basis-32">
                           <p className="truncate text-sm font-medium">{invite.email}</p>
                           <p className="truncate text-xs text-muted-foreground">
                             {invite.role} · expires {formatRelative(invite.expiresAt)}

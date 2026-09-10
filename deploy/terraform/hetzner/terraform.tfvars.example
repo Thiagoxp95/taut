@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars. Never place the HCLOUD_TOKEN in this file.
+ssh_public_key    = "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY"
+ssh_allowed_cidrs = ["203.0.113.10/32"] # Replace with your real operator/VPN CIDR.
+repository_url    = "https://github.com/Thiagoxp95/taut.git"
+customers = {
+  my-company = {
+    domain      = "taut.example.com"
+    revision    = "REPLACE_WITH_PUBLISHED_40_CHARACTER_COMMIT_SHA"
+    server_type = "cx33"
+    location    = "hel1"
+    backups     = true
+    calls_domain = "calls.example.com" # Omit to disable huddles and their extra services/ports.
+  }
+}

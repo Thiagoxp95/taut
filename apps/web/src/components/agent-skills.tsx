@@ -9,7 +9,7 @@ import {
   RefreshCwIcon,
   SparklesIcon,
   TrashIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { AgentId, AgentSkill, SkillCandidate, SkillUpdatePolicy } from '@taut/contract'
 import { SKILL_SOURCE_HELP } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
@@ -553,7 +553,7 @@ function SkillDialog({
   const readOnly = editing !== null && (editing.builtin || !canManage)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden sm:max-w-3xl lg:max-w-5xl">
+      <DialogContent className="flex max-h-[88dvh] flex-col overflow-hidden sm:max-w-3xl lg:max-w-5xl">
         {editing === null ? (
           <SkillForm agentId={agentId} editing={null} readOnly={false} onDone={close} />
         ) : (
@@ -650,8 +650,8 @@ export function AgentSkillsTab({
               const installed = skill.origin === 'installed'
               return (
                 <li key={skill.name} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="flex flex-wrap items-center gap-2 font-mono text-sm font-medium">
+                  <div className="min-w-0 flex-1 basis-48">
+                    <p className="flex flex-wrap items-center gap-2 font-mono text-sm font-medium break-all">
                       {skill.name}
                       {skill.builtin ? (
                         <Chip title="Ships with Taut. Every agent has it; it cannot be edited or deleted.">
@@ -780,7 +780,7 @@ export function AgentSkillsTab({
       />
 
       <Dialog open={installOpen} onOpenChange={setInstallOpen}>
-        <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden sm:max-w-2xl">
+        <DialogContent className="flex max-h-[88dvh] flex-col overflow-hidden sm:max-w-2xl">
           <InstallSkillForm agentId={agentId} onDone={() => setInstallOpen(false)} />
         </DialogContent>
       </Dialog>
@@ -791,7 +791,7 @@ export function AgentSkillsTab({
           if (!next) setReviewing(null)
         }}
       >
-        <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden sm:max-w-4xl">
+        <DialogContent className="flex max-h-[88dvh] flex-col overflow-hidden sm:max-w-4xl">
           {reviewing === null ? null : (
             <SkillUpdateDialog
               agentId={agentId}

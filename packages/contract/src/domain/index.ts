@@ -1,3 +1,5 @@
+export * from './authorization.js'
+export * from './canvas.js'
 export * from './agent.js'
 export * from './attachment.js'
 export * from './avatar.js'
@@ -26,3 +28,5 @@ export * from './task.js'
 export * from './trigger.js'
 export * from './user.js'
 export * from './vault.js'
+
+export * from './component.js'

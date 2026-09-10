@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { KeyRoundIcon, LockIcon, PlusIcon, ShieldAlertIcon, TrashIcon } from 'lucide-react'
+import { KeyRoundIcon, LockIcon, PlusIcon, ShieldAlertIcon, TrashIcon } from '@taut/ui/components/icons'
 import type { VaultItemMeta } from '@taut/contract'
 import { Badge } from '@taut/ui/components/badge'
 import { Button } from '@taut/ui/components/button'

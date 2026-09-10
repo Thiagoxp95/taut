@@ -66,6 +66,7 @@ describe('TautApi', () => {
     ])
     expect(endpointNames('channels')).toEqual([
       'list',
+      'inbox',
       'create',
       'dm',
       'get',
@@ -75,7 +76,9 @@ describe('TautApi', () => {
       'addMember',
       'removeMember',
       'context',
-      'markRead'
+      'markRead',
+      'canvases',
+      'canvas'
     ])
     expect(endpointNames('messages')).toEqual([
       'list',
@@ -84,7 +87,9 @@ describe('TautApi', () => {
       'delete',
       'thread',
       'react',
-      'unreact'
+      'unreact',
+      'authorization',
+      'decideAuthorization'
     ])
     expect(endpointNames('attachments')).toEqual(['upload', 'get', 'content'])
     expect(endpointNames('vault')).toEqual(['list', 'add', 'revoke'])
@@ -105,6 +110,9 @@ describe('TautApi', () => {
       'get',
       'update',
       'delete',
+      'addConnector',
+      'updateConnector',
+      'removeConnector',
       'getSkill',
       'putSkill',
       'deleteSkill',

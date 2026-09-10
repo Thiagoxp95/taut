@@ -8,8 +8,9 @@
  */
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
 import { Message } from '@taut/contract'
+import { DateTime } from 'effect'
 
-import { qk, type PageOf } from '@/lib/query-keys'
+import { qk, type PageOf } from './query-keys'
 
 export type MessagePage = PageOf<Message>
 export type MessagePages = InfiniteData<MessagePage, string | undefined>
@@ -125,13 +126,16 @@ export function flattenChannel(data: MessagePages | undefined): readonly Message
   if (data === undefined) return []
   const out: Message[] = []
   for (const page of data.pages) out.push(...page.items)
-  return out.reverse()
+  return out.sort(messageOrder)
 }
 
-/** Threads already arrive oldest-first. */
+const messageOrder = (a: Message, b: Message): number =>
+  DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) || a.seq - b.seq
+
+/** Completed replies move from their placeholder's position to when they were posted. */
 export function flattenThread(data: MessagePages | undefined): readonly Message[] {
   if (data === undefined) return []
   const out: Message[] = []
   for (const page of data.pages) out.push(...page.items)
-  return out
+  return out.sort(messageOrder)
 }

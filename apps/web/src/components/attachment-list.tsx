@@ -1,6 +1,13 @@
 import * as React from 'react'
-import { DownloadIcon, FileArchiveIcon, FileIcon, FileTextIcon, ImageIcon } from 'lucide-react'
-import type { Attachment } from '@taut/contract'
+import {
+  DownloadIcon,
+  FileArchiveIcon,
+  FileIcon,
+  FileTextIcon,
+  ImageIcon,
+  MonitorIcon
+} from '@taut/ui/components/icons'
+import type { Attachment, MessageId } from '@taut/contract'
 import { cn } from '@taut/ui/lib/utils'
 import {
   Dialog,
@@ -10,7 +17,8 @@ import {
   DialogTitle
 } from '@taut/ui/components/dialog'
 import { attachmentUrl } from '@/lib/api'
-import { attachmentKind, isInlineImage } from '@/lib/attachments'
+import { useCanvasWorkspace } from '@/components/canvas-dialog'
+import { attachmentKind, canvasAttachmentFormat, isInlineImage } from '@/lib/attachments'
 import { formatBytes } from '@/lib/format'
 
 /** The stand-in for a file that is not shown inline. Also used by the composer strip. */
@@ -30,14 +38,16 @@ export function AttachmentIcon({ mimeType, className }: { mimeType: string; clas
 
 /**
  * Everything sent with a message (docs/build-plan-attachments.md D5): images in
- * a grid that opens a lightbox, every other file as a download card. Shared by
+ * a grid that opens a lightbox, documents in the canvas, and other files as downloads. Shared by
  * the channel, the thread panel and anything else that renders a `Message`.
  */
 export function AttachmentList({
   attachments,
+  threadId,
   className
 }: {
   attachments: readonly Attachment[]
+  threadId?: MessageId
   className?: string
 }) {
   const [preview, setPreview] = React.useState<Attachment | null>(null)
@@ -80,7 +90,7 @@ export function AttachmentList({
         <ul className="flex flex-col gap-1.5">
           {files.map((attachment) => (
             <li key={attachment.id}>
-              <FileCard attachment={attachment} />
+              <FileCard attachment={attachment} threadId={threadId} />
             </li>
           ))}
         </ul>
@@ -91,13 +101,13 @@ export function AttachmentList({
   )
 }
 
-function FileCard({ attachment }: { attachment: Attachment }) {
-  return (
-    <a
-      href={attachmentUrl(attachment.id, { download: true })}
-      download={attachment.name}
-      className="group/file flex items-center gap-3 rounded-md border bg-background px-3 py-2 transition-colors outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
-    >
+function FileCard({ attachment, threadId }: { attachment: Attachment; threadId?: MessageId }) {
+  const canvas = useCanvasWorkspace()
+  const opensCanvas = canvas !== null && canvasAttachmentFormat(attachment) !== undefined
+  const className =
+    'group/file flex w-full items-center gap-3 rounded-md border bg-background px-3 py-2 text-left transition-colors outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50'
+  const content = (
+    <>
       <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
         <AttachmentIcon mimeType={attachment.mimeType} className="size-4" />
       </span>
@@ -107,10 +117,28 @@ function FileCard({ attachment }: { attachment: Attachment }) {
           {formatBytes(attachment.size)}
         </span>
       </span>
-      <span className="flex items-center gap-1 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover/file:opacity-100 group-focus-visible/file:opacity-100">
-        <DownloadIcon className="size-3.5" />
-        Download
+      <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover/file:opacity-100 group-focus-visible/file:opacity-100">
+        {opensCanvas ? <MonitorIcon className="size-3.5" /> : <DownloadIcon className="size-3.5" />}
+        {opensCanvas ? 'Open' : 'Download'}
       </span>
+    </>
+  )
+  return opensCanvas ? (
+    <button
+      type="button"
+      className={className}
+      aria-label={`Open ${attachment.name} in canvas`}
+      onClick={() => canvas.showAttachment(attachment, threadId)}
+    >
+      {content}
+    </button>
+  ) : (
+    <a
+      href={attachmentUrl(attachment.id, { download: true })}
+      download={attachment.name}
+      className={className}
+    >
+      {content}
     </a>
   )
 }

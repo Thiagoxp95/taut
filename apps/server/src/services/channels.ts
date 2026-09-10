@@ -1,5 +1,6 @@
 import { SqlClient } from '@effect/sql'
 import type { CurrentUserShape } from '@taut/contract/api'
+import { DmInboxItem } from '@taut/contract/api'
 import { type Channel, type ChannelMember, MemberKind } from '@taut/contract/domain'
 import { Conflict, Forbidden, NotFound, type Unauthorized, Validation } from '@taut/contract/errors'
 import {
@@ -9,6 +10,7 @@ import {
   DepartmentId,
   EventSeq,
   MemberId,
+  ProjectId,
   UserId,
   newChannelId
 } from '@taut/contract/ids'
@@ -25,8 +27,14 @@ import { type Actor, actor, isAdmin } from './access.js'
 import { type Emit, EventPublisher } from './publisher.js'
 import { Users } from './users.js'
 
+/**
+ * `hidden` and `project_id` are listed here and nowhere else (docs/build-plan-issues.md
+ * D9): every channel read goes through this string, and a read that omits them
+ * decodes an issue thread's channel as an ordinary visible one.
+ */
 const CHANNEL_COLUMNS =
-  'c.id, c.company_id, c.department_id, c.name, c.kind, c.archived_at, c.created_at'
+  'c.id, c.company_id, c.department_id, c.name, c.kind, c.archived_at, ' +
+  'c.hidden, c.project_id, c.created_at'
 const MEMBER_COLUMNS = 'channel_id, member_kind, member_id, last_read_seq'
 
 export interface MemberRef {
@@ -64,13 +72,19 @@ export class Channels extends Effect.Service<Channels>()('Channels', {
       departmentId: Schema.NullOr(DepartmentId)
     })
 
-    /** Admin+: every channel plus the DMs they are in. */
+    /**
+     * Admin+: every channel plus the DMs they are in — minus the hidden ones
+     * (docs/build-plan-issues.md D9). A ticket's conversation has a home already,
+     * which is the ticket; a sidebar row for it would be the same conversation in
+     * two places. Only this list and its member-scoped twin filter: search,
+     * mentions, notifications, unread and tasks all still see an ordinary channel.
+     */
     const listAll = findAll({
       Request: ListRequest,
       Result: ChannelRowSchema,
       execute: (r) => sql`
         SELECT ${sql.literal(CHANNEL_COLUMNS)} FROM channels c
-        WHERE c.company_id = ${r.companyId}
+        WHERE c.company_id = ${r.companyId} AND c.hidden = 0
           AND (c.kind = 'channel' OR EXISTS (
             SELECT 1 FROM channel_members m
             WHERE m.channel_id = c.id AND m.member_kind = 'user' AND m.member_id = ${r.userId}))
@@ -78,16 +92,43 @@ export class Channels extends Effect.Service<Channels>()('Channels', {
         ORDER BY c.created_at ASC, c.rowid ASC`
     })
 
-    /** Member: only channels/DMs they belong to. */
+    /** Member: only channels/DMs they belong to, hidden ones excluded as above (D9). */
     const listMine = findAll({
       Request: ListRequest,
       Result: ChannelRowSchema,
       execute: (r) => sql`
         SELECT ${sql.literal(CHANNEL_COLUMNS)} FROM channels c
         JOIN channel_members m ON m.channel_id = c.id AND m.member_kind = 'user' AND m.member_id = ${r.userId}
-        WHERE c.company_id = ${r.companyId}
+        WHERE c.company_id = ${r.companyId} AND c.hidden = 0
           AND (${r.departmentId} IS NULL OR c.department_id = ${r.departmentId})
         ORDER BY c.created_at ASC, c.rowid ASC`
+    })
+
+    const inboxRows = findAll({
+      Request: Schema.Struct({ companyId: CompanyId, userId: UserId }),
+      Result: DmInboxItem,
+      execute: (r) => sql`
+        SELECT c.id AS channelId, latest.id AS messageId, latest.thread_id AS threadId,
+          latest.author_id AS authorId, latest.author_kind AS authorKind,
+          latest.body, latest.created_at AS createdAt,
+          (SELECT MAX(received.seq) FROM messages received
+            WHERE received.company_id = ${r.companyId} AND received.channel_id = c.id
+              AND received.author_id <> ${r.userId} AND received.status = 'sent') AS seq,
+          c.archived_at AS archivedAt,
+          (SELECT COUNT(*) FROM messages unread
+            WHERE unread.company_id = ${r.companyId} AND unread.channel_id = c.id
+              AND unread.author_id <> ${r.userId} AND unread.status = 'sent'
+              AND unread.seq > member.last_read_seq) AS unread
+        FROM channels c
+        JOIN channel_members member ON member.channel_id = c.id
+          AND member.member_kind = 'user' AND member.member_id = ${r.userId}
+        JOIN messages latest ON latest.id = (
+          SELECT m.id FROM messages m
+          WHERE m.company_id = ${r.companyId} AND m.channel_id = c.id
+            AND m.author_id <> ${r.userId} AND m.status = 'sent'
+          ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1)
+        WHERE c.company_id = ${r.companyId} AND c.kind = 'dm' AND c.hidden = 0
+        ORDER BY latest.created_at DESC, latest.rowid DESC`
     })
 
     const ofDepartment = findAll({
@@ -122,6 +163,34 @@ export class Channels extends Effect.Service<Channels>()('Channels', {
       execute: (r) => sql`
         INSERT INTO channels (id, company_id, department_id, name, kind, created_at)
         VALUES (${r.id}, ${r.companyId}, ${r.departmentId}, ${r.name}, ${r.kind}, ${r.createdAt})`
+    })
+
+    /**
+     * The hidden channel an issue thread lives in (docs/build-plan-issues.md D9,
+     * D21). Its own statement rather than a flag on `insert`, because everything
+     * about it is the opposite of an ordinary channel: no department (like a DM,
+     * which already proves the column is nullable), no members at creation, and
+     * `hidden = 1` so the sidebar never draws it.
+     */
+    const insertHidden = run({
+      Request: Schema.Struct({
+        id: ChannelId,
+        companyId: CompanyId,
+        projectId: ProjectId,
+        name: Schema.String,
+        createdAt: Schema.String
+      }),
+      execute: (r) => sql`
+        INSERT INTO channels (id, company_id, department_id, name, kind, hidden, project_id, created_at)
+        VALUES (${r.id}, ${r.companyId}, NULL, ${r.name}, 'channel', 1, ${r.projectId}, ${r.createdAt})`
+    })
+
+    const byProject = findOne({
+      Request: Schema.Struct({ companyId: CompanyId, projectId: ProjectId }),
+      Result: ChannelRowSchema,
+      execute: (r) => sql`
+        SELECT ${sql.literal(CHANNEL_COLUMNS)} FROM channels c
+        WHERE c.company_id = ${r.companyId} AND c.project_id = ${r.projectId}`
     })
 
     const rename = run({
@@ -333,11 +402,27 @@ export class Channels extends Effect.Service<Channels>()('Channels', {
     const isUserMember = (channelId: ChannelId, userId: UserId): Effect.Effect<boolean> =>
       memberRow({ channelId, memberKind: 'user', memberId: userId }).pipe(Effect.map(Option.isSome))
 
+    /**
+     * A hidden project channel is readable by every member of the company
+     * (docs/build-plan-issues.md D22), joined or not.
+     *
+     * It is the one channel whose *contents* are already public to them by another
+     * route: they can open the ticket, and a ticket is exactly as private as the
+     * project it hangs under (docs/build-plan-projects.md D9). Membership stays
+     * deferred (D21) — this is a read exemption, not a join, so nobody gets an
+     * unread badge for a ticket they have never spoken on. Without it the first
+     * message of somebody else's thread is invisible until they reply to it.
+     */
+    const isOpenProjectThread = (ch: ChannelRow): boolean =>
+      ch.kind === 'channel' && ch.hidden !== 0 && ch.project_id !== null
+
     /** Admin+ read every channel; DMs are only ever visible to their two members. */
     const canView = (who: Actor, ch: ChannelRow): Effect.Effect<boolean> =>
-      ch.kind === 'dm' || !isAdmin(who.role)
-        ? isUserMember(ch.id, who.userId)
-        : Effect.succeed(true)
+      isOpenProjectThread(ch)
+        ? Effect.succeed(true)
+        : ch.kind === 'dm' || !isAdmin(who.role)
+          ? isUserMember(ch.id, who.userId)
+          : Effect.succeed(true)
 
     const requireView = (who: Actor, ch: ChannelRow): Effect.Effect<void, Forbidden> =>
       canView(who, ch).pipe(
@@ -400,7 +485,7 @@ export class Channels extends Effect.Service<Channels>()('Channels', {
 
     /**
      * Find-or-create the DM between two members, with no session: the agent API opens the
-     * agent↔agent DM the first time same-department teammates talk directly. `dm` above is the
+     * DM the first time teammates or an agent and its head talk directly. `dm` is the
      * human-facing endpoint and still checks the actor; this one is only reachable from code
      * that has already enforced the department boundary.
      */
@@ -427,6 +512,40 @@ export class Channels extends Effect.Service<Channels>()('Channels', {
             })
             yield* insertMember({ channelId: id, ...a })
             yield* insertMember({ channelId: id, ...b })
+            const channel = yield* loadChannel(companyId, id)
+            yield* emit({ type: 'channel.created', payload: { channel } })
+            return id
+          })
+        )
+      })
+
+    /**
+     * Find-or-create the one hidden channel a project's issue threads talk in
+     * (docs/build-plan-issues.md D9). Created lazily by the first thread in the
+     * project and never in bulk (D8): a workspace of 4 000 tickets gets at most
+     * one channel per project, and only for the projects somebody actually talked
+     * about.
+     *
+     * No session, like `ensureDm` above: the caller — `Projects.openIssueThread` —
+     * has already decided that this actor may post about this ticket, and there is
+     * no channel to be a member of yet at the moment it decides.
+     *
+     * `channel.created` is emitted like any other channel's, because that is what
+     * it is: a client needs the row to render the thread, and the `hidden` flag on
+     * it is precisely how the sidebar knows to leave it out.
+     */
+    const ensureProjectChannel = (
+      companyId: CompanyId,
+      projectId: ProjectId,
+      name: string
+    ): Effect.Effect<ChannelId> =>
+      Effect.gen(function* () {
+        const existing = yield* byProject({ companyId, projectId })
+        if (Option.isSome(existing)) return existing.value.id
+        return yield* publisher.transact(companyId, (emit) =>
+          Effect.gen(function* () {
+            const id = newChannelId()
+            yield* insertHidden({ id, companyId, projectId, name, createdAt: nowIso() })
             const channel = yield* loadChannel(companyId, id)
             yield* emit({ type: 'channel.created', payload: { channel } })
             return id
@@ -798,6 +917,7 @@ export class Channels extends Effect.Service<Channels>()('Channels', {
       })
 
     return {
+      inbox: (me: CurrentUserShape) => actor(me).pipe(Effect.flatMap(inboxRows)),
       // shared
       load,
       requireView,
@@ -822,6 +942,20 @@ export class Channels extends Effect.Service<Channels>()('Channels', {
       ): Effect.Effect<Option.Option<ChannelId>> =>
         findDm({ companyId, userId, ...ref }).pipe(Effect.map(Option.map((r) => r.id))),
       ensureDm,
+      ensureProjectChannel,
+      /** Whether this is an issue thread's channel (D21, D22): read by all, joined by posting. */
+      isProjectThread: isOpenProjectThread,
+      /**
+       * Membership on demand (docs/build-plan-issues.md D21): posting into an
+       * issue thread puts the poster — and any agent they mentioned — in the
+       * project's hidden channel. `INSERT OR IGNORE`, so joining twice is free and
+       * the caller does not have to ask first. Deliberately not `addMember`: there
+       * is nobody to be the manager of a channel with no department, and pre-
+       * seeding every company member into every project's channel would put a read
+       * cursor per person per project behind a conversation that may never happen.
+       */
+      join: (channelId: ChannelId, ref: MemberRef): Effect.Effect<void> =>
+        insertMember({ channelId, ...ref }),
       channelIdsOf: (ref: MemberRef): Effect.Effect<ReadonlyArray<ChannelId>> =>
         channelsOfMember(ref).pipe(Effect.map((rows) => rows.map((r) => r.channel_id))),
       setDmsArchived,

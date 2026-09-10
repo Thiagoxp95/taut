@@ -1,9 +1,10 @@
 import * as React from 'react'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate, useLocation } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeftRightIcon,
   BellIcon,
+  MailIcon,
   BellOffIcon,
   BotIcon,
   Building2Icon,
@@ -30,7 +31,7 @@ import {
   SunIcon,
   UserPlusIcon,
   UsersIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import type { Channel, Department, Project } from '@taut/contract'
 import { cn } from '@taut/ui/lib/utils'
 import {
@@ -93,6 +94,7 @@ import {
   useCanAdminister,
   useCompanies,
   useHandovers,
+  useDmInbox,
   useLogout,
   useLinearConnection,
   useMe,
@@ -112,6 +114,22 @@ import { realtime, type ConnectionStatus } from '@/lib/ws'
  * The router paints `data-status="active"` on a matched `<Link>`; the sidebar's
  * own active styling keys off `data-active`, so links opt in here instead.
  */
+function InboxNavItem() {
+  const inbox = useDmInbox()
+  const unread = inbox.data?.items.reduce((sum, item) => sum + item.unread, 0) ?? 0
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild tooltip="Inbox" className={activeLinkClass}>
+        <Link to="/inbox">
+          <MailIcon className="opacity-70" />
+          <span className="min-w-0 flex-1 truncate">Inbox</span>
+          <UnreadBadge count={unread} />
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  )
+}
+
 const activeLinkClass =
   'data-[status=active]:bg-sidebar-primary data-[status=active]:font-medium data-[status=active]:text-sidebar-primary-foreground'
 
@@ -219,6 +237,7 @@ function DmNavItem({
       >
         <Link to="/dm/$channelId" params={{ channelId }}>
           <EntityAvatar
+            memberId={partner?.id}
             avatar={partner?.avatar ?? { kind: 'emoji', value: '💬' }}
             kind={partner?.kind ?? 'user'}
             face={partner?.face}
@@ -407,37 +426,41 @@ function DepartmentGroup({
   const [creating, setCreating] = React.useState(false)
   const lookup = useLookupMember()
   const head = lookup(department.headUserId)
-  const { state, setOpen: setSidebarOpen } = useSidebar()
+  const { state, isMobile, setOpen: setSidebarOpen } = useSidebar()
+  const collapsed = !isMobile && state === 'collapsed'
 
   return (
     <>
-      <Collapsible open={open} onOpenChange={setOpen} className="group/dept" asChild>
+      <Collapsible
+        open={open}
+        onOpenChange={(next) => {
+          if (!collapsed) setOpen(next)
+        }}
+        className="group/dept"
+        asChild
+      >
         <SidebarMenuItem>
           <CollapsibleTrigger asChild>
             <SidebarMenuButton
               tooltip={department.name}
-              className="font-medium text-sidebar-foreground/90"
+              className="pr-14 font-medium text-sidebar-foreground/90"
               onClick={() => {
                 // In icon mode the sub-list is hidden, so open the sidebar instead.
-                if (state === 'collapsed') setSidebarOpen(true)
+                if (collapsed) setSidebarOpen(true)
               }}
             >
-              <ChevronRightIcon
-                className={cn(
-                  'shrink-0 transition-transform group-data-[collapsible=icon]:hidden',
-                  open && 'rotate-90'
-                )}
-              />
-              <FolderIcon className="hidden shrink-0 opacity-70 group-data-[collapsible=icon]:block" />
+              <span className="taut-sidebar-disclosure-icon">
+                <ChevronRightIcon className={cn('taut-sidebar-chevron', open && 'rotate-90')} />
+                <FolderIcon className="taut-sidebar-folder" />
+              </span>
               <span className="min-w-0 flex-1 truncate text-left">{department.name}</span>
               {head === undefined ? null : (
                 <EntityAvatar
+                  memberId={head.id}
                   avatar={head.avatar}
                   name={head.name}
                   size="sm"
-                  // Hidden under exactly the conditions that reveal the row
-                  // actions below, or the head would sit under the gear.
-                  className="shrink-0 opacity-80 group-focus-within/dept:invisible group-hover/dept:invisible"
+                  className="shrink-0 opacity-80"
                 />
               )}
             </SidebarMenuButton>
@@ -530,7 +553,8 @@ function ProjectsGroup() {
   const connection = useLinearConnection()
   const projects = useProjects().data?.items ?? []
   const canAdminister = useCanAdminister()
-  const { state, setOpen: setSidebarOpen } = useSidebar()
+  const { state, isMobile, setOpen: setSidebarOpen } = useSidebar()
+  const collapsed = !isMobile && state === 'collapsed'
 
   const [open, setOpen] = React.useState(() => {
     try {
@@ -559,24 +583,27 @@ function ProjectsGroup() {
     <SidebarGroup className="py-0">
       <SidebarGroupContent>
         <SidebarMenu>
-          <Collapsible open={open} onOpenChange={toggle} asChild>
+          <Collapsible
+            open={open}
+            onOpenChange={(next) => {
+              if (!collapsed) toggle(next)
+            }}
+            asChild
+          >
             <SidebarMenuItem>
               <CollapsibleTrigger asChild>
                 <SidebarMenuButton
                   tooltip="Projects"
-                  className="font-medium text-sidebar-foreground/90"
+                  className="pr-14 font-medium text-sidebar-foreground/90"
                   onClick={() => {
                     // In icon mode the sub-list is hidden, so open the sidebar instead.
-                    if (state === 'collapsed') setSidebarOpen(true)
+                    if (collapsed) setSidebarOpen(true)
                   }}
                 >
-                  <ChevronRightIcon
-                    className={cn(
-                      'shrink-0 transition-transform group-data-[collapsible=icon]:hidden',
-                      open && 'rotate-90'
-                    )}
-                  />
-                  <SquareKanbanIcon className="hidden shrink-0 opacity-70 group-data-[collapsible=icon]:block" />
+                  <span className="taut-sidebar-disclosure-icon">
+                    <ChevronRightIcon className={cn('taut-sidebar-chevron', open && 'rotate-90')} />
+                    <SquareKanbanIcon className="taut-sidebar-folder" />
+                  </span>
                   <span className="min-w-0 flex-1 truncate text-left">Projects</span>
                   <CountBadge count={projects.length} />
                 </SidebarMenuButton>
@@ -683,6 +710,7 @@ function UserFooter() {
           className="data-[state=open]:bg-sidebar-accent"
         >
           <EntityAvatar
+            memberId={user?.id}
             avatar={user?.avatar ?? { kind: 'emoji', value: '👤' }}
             name={user?.name ?? ''}
             presence={presence}
@@ -748,8 +776,23 @@ export function AppSidebar({
   connection: ConnectionStatus
   lastSeq: number
 }) {
+  const pathname = useLocation({ select: (location) => location.pathname })
+  const { setOpenMobile } = useSidebar()
+  React.useEffect(() => {
+    setOpenMobile(false)
+  }, [pathname, setOpenMobile])
   const { departments } = useDepartmentList()
-  const { company, byDepartment } = useChannelGroups()
+  const { company: allCompany, byDepartment } = useChannelGroups()
+  /*
+   * The hidden channels that back issue threads (docs/build-plan-issues.md D9).
+   * Real in every other way — an unread message in one still badges, still
+   * notifies, still shows in search — they just have no row of their own to
+   * click, because their home is the ticket.
+   *
+   * Only this list is filtered: a hidden channel has `department_id = NULL` like
+   * a DM (D21), so the company group is the only bucket one can land in.
+   */
+  const company = React.useMemo(() => allCompany.filter((channel) => !channel.hidden), [allCompany])
   const dms = useDmViews()
   const palette = useCommandPalette()
   const canAdminister = useCanAdminister()
@@ -772,14 +815,11 @@ export function AppSidebar({
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="gap-1 border-b border-sidebar-border">
+      <SidebarHeader className="taut-sidebar-header border-b border-sidebar-border">
         <SidebarMenu>
-          <SidebarMenuItem className="flex min-w-0 items-center gap-1">
+          <SidebarMenuItem className="relative min-w-0">
             <CompanyHeader onInvite={() => setInviting(true)} />
-            <SidebarTrigger className="shrink-0 text-sidebar-foreground/60 group-data-[collapsible=icon]:hidden" />
-          </SidebarMenuItem>
-          <SidebarMenuItem className="hidden group-data-[collapsible=icon]:block">
-            <SidebarTrigger className="size-8 text-sidebar-foreground/60" />
+            <SidebarTrigger className="taut-sidebar-toggle text-sidebar-foreground/60" />
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
@@ -801,6 +841,7 @@ export function AppSidebar({
                   </kbd>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+              <InboxNavItem />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -944,10 +985,10 @@ export function AppSidebar({
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild tooltip="Subscriptions" className={activeLinkClass}>
+                <SidebarMenuButton asChild tooltip="Providers" className={activeLinkClass}>
                   <Link to="/subscriptions">
                     <CreditCardIcon className="opacity-70" />
-                    <span className="min-w-0 flex-1 truncate">Subscriptions</span>
+                    <span className="min-w-0 flex-1 truncate">Providers</span>
                     <CountBadge count={subscriptionCount} />
                   </Link>
                 </SidebarMenuButton>
@@ -968,7 +1009,7 @@ export function AppSidebar({
       <SidebarSeparator className="mx-0" />
 
       <SidebarFooter className="gap-1">
-        <div className="group-data-[collapsible=icon]:hidden">
+        <div className="taut-sidebar-connection">
           <ConnectionIndicator status={connection} lastSeq={lastSeq} />
         </div>
         <SidebarMenu>

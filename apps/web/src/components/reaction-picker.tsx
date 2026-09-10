@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { SearchIcon } from 'lucide-react'
+import { SearchIcon } from '@taut/ui/components/icons'
 import { cn } from '@taut/ui/lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '@taut/ui/components/popover'
 import { recentEmoji } from '@/lib/message-actions'

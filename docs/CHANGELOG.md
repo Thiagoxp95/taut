@@ -2222,7 +2222,7 @@ than queueing (D24). At most 50 armed signals per agent (D25).
 Migration `0031` moves `schedule_json`+`timezone` into `trigger_json`, backfilling in pure SQL, and
 adds the denormalised `trigger_kind`/`trigger_event` columns SQLite needs to index the hot path.
 `0032` adds `signals` and `tasks.signal_id`. Two new daemons: `triggerRunner` over
-`Bus.streamAll()`, and `signalRunner` on a 5-second tick. Broadcast delivery is *only* a publish on
+`Bus.streamAll()`, and `signalRunner` on a 5-second tick. Broadcast delivery is _only_ a publish on
 the bus — the trigger runner picks it up through `SignalTrigger`, so the two paths meet at the bus
 and nowhere else. Three agent tools: `emit_signal`, `list_signals`, `cancel_signal`, reaching the
 agent through `packages/taut-mcp`.
@@ -2242,3 +2242,137 @@ container and the keyboard roving are all unexercised. `call.ended` triggers hav
 a real LiveKit; the tests insert `calls` rows directly. `Signals.emit` from a human is supported by
 the schema and has no caller. There is no `taut signal` CLI subcommand — the MCP surface is
 complete, the human shortcut is not.
+
+## Issues — a Linear ticket you can actually edit, with a thread on it (2026-09-09)
+
+`docs/build-plan-issues.md`, D1–D22. Three passes: contract → server → web, built by parallel
+agents against the frozen plan. Migration **0033**.
+
+**What now works.** A mirrored issue has a page of its own at `/issues/:issueId`, and the id may be
+a `pis_…` or a Linear identifier, so `ENG-4636` pasted into chat links straight through. Title and
+description are editable in place (blur or ⌘↵ commits, Esc reverts). The rail edits status,
+priority, assignee, labels, project, milestone, due date and estimate, each through a live
+pick-list read from Linear rather than a mirrored copy that goes stale. Sub-issues list, and
+"Add sub-issue" files one with the parent pre-set. Delete is admin-only, behind a
+type-the-identifier confirm, and calls Linear's `issueDelete` — trash, restorable for 30 days.
+Rows in a project's Issues tab now link here instead of jumping to Linear.
+
+Every write is write-through: the mutation goes to Linear, and the row is rewritten from the issue
+Linear sends back (D2, the same discipline as the project board drag). The UI is optimistic and
+rolls back on refusal. Projects themselves stayed read-only, which `projects.test.ts` still proves.
+
+**The thread.** An issue can carry one Taut thread, created lazily — no ticket has one until
+somebody posts (D8). It lives in a hidden channel, one per project, `department_id` NULL like a DM,
+absent from the sidebar; membership is joined on demand when you post (D21). Because it is a real
+thread it gets mentions, tasks, notifications, unread counts, search and attachments for free, and
+`@agent` in it wakes an agent that knows which ticket it is standing in (D17,
+`agents/issueContext.ts`). Linear comments mirror in **only when their author maps to a Taut human**
+(D11) — an unmapped author's comment renders read-only, because every available Taut author for it
+would be a lie. A Taut reply is pushed back to Linear as a comment by a `message.created`
+subscriber that logs and drops its own failures, so chat never fails because Linear is down.
+Linear's own history is read live and never stored (D13).
+
+**Agents** got `linear_get_issue` and `linear_update_issue` beside `linear_create_issue`, on the
+same gate. `linear_update_issue` takes a state by _name_, resolved against the team's live
+pick-list, because an agent cannot know a state UUID.
+
+**Try it:** `pnpm dev` → any project → Issues tab → click a row. Type in the composer at the bottom
+to open the ticket's thread, then `@` an agent in it.
+
+**Verified:** `pnpm typecheck` and `pnpm test` clean across the monorepo — 32 server test files,
+293 passing, of which 22 are new (`test/issues.test.ts`, `test/issue-thread.test.ts`). Route
+matching checked live with curl: `GET /api/projects/issues/ENG-9999` answers
+`{"entity":"ProjectIssue","_tag":"NotFound"}`, so the new endpoints are not being swallowed by the
+`/:projectId` catch-all (D20 was the real risk there).
+
+**Not verified.** Nothing ever hit real Linear: every new GraphQL document, the
+`IssueUpdateInput`/`IssueCreateInput` variable shapes, the history field names and the options
+query are written against Linear's published schema and exercised only against a stub. The page has
+never been rendered in a browser — the seeded dev account is not a member of the company that holds
+the mirror, so opening it needs the owner's own login. Unexercised end to end: optimistic rollback,
+comment reconciliation on page open (D12), the whole `openIssueThread` → hidden channel → root
+message flow, and the `message.created` → Linear comment push (tested through `pushIssueComment`
+directly, not through the live bus).
+
+**Known gaps.** `IssueHistoryKind.milestone` never fires — the history query asks for a
+conservative field set, because one renamed field fails the whole document. A mapped Linear comment
+on a ticket with no thread yet stays a read-only card and mirrors in on the first read after
+somebody opens the thread. The estimate picker offers 1–8 because `IssueOptions` does not carry the
+team's scale; an out-of-scale value comes back as a `Validation`. `issueCreate` is the one Linear
+call not retried — a retried create is a second ticket.
+
+## The running commentary under a streaming reply (docs/build-plan-activity.md, 2026-09-09)
+
+A reply that had not written its first word was an orb and nothing else, for as long as the run
+took. It now says what the agent is doing, in muted italic, on the line the text will take:
+_"Reading lib/live.ts"_, _"Running pnpm test"_, _"Searching for AgentEvent"_, or the last line of
+the model's own reasoning. The line replaces itself as the run moves, fades in on each change,
+truncates rather than wraps, and survives past the first paragraph — most of a long run happens
+after the agent starts writing (D6).
+
+**Reasoning is its own event.** `AgentEvent` gained `thinking`, parsed from claude-code's
+`{type:"thinking"}` blocks, codex `reasoning` items and opencode `reasoning` parts (cursor reports
+none). It can never become a `text_delta`, which is the point: the body is the answer, and the
+answer is what the reader keeps.
+
+**Nothing is stored.** `agent.activity` rides the `Bus` and is broadcast only, listed in
+`EphemeralEventTypes` beside `typing`, dropped for a backed-up socket on the same rule. It is
+throttled to one broadcast per 400 ms per task, newest-wins, and the text is flattened to one line
+and truncated server-side on a word boundary (D3). A reload mid-run shows the orb and waits for the
+next line. Cleared when the run ends, done or failed alike (D9).
+
+**Tool names are phrased, not printed** (`agents/activity.ts`): file, shell, search, web, Taut MCP
+and browser tools each get a sentence, paths shorten to their last two segments, and an unknown
+tool falls back to its own name rather than to silence. `TAUT_SHOW_TOOLS` still injects
+`_(using X)_` into the body when set; it stays off by default, and this line is what replaces it.
+
+**Try it:** `pnpm dev` → DM an agent → watch the line under its name while it works.
+
+**Verified:** `pnpm typecheck` and `pnpm test` clean across the monorepo — 34 server test files,
+301 passing, of which 8 are new (`test/activity.test.ts` for the phrasing,
+`test/activityLive.test.ts` for the wire), plus 4 in `packages/runtime/test/thinking.test.ts`.
+`test/activityLive.test.ts` is the real thing: a task run against the fake machine provider, a real
+socket, and the two frames that reach it — `Reading the failing test.` from a `thinking` block and
+`Running pnpm test` from a `tool_use` block, both on the streaming message, with the reply body
+still just `done`. `pnpm lint` clean for `@taut/server` and `@taut/web` (`@taut/desktop` has
+pre-existing `no-undef` errors in its preload scripts, untouched here).
+
+**Not verified.** Nothing was ever watched in a browser. The dev company's only claude-code
+subscription is `auth-failed` and the seat needs the owner's own login, so every live run in the UI
+fails before it spawns; the React half — `AgentActivityLine`, the fade, the truncation at real
+column widths — has never been rendered against a running agent. Codex and opencode reasoning
+shapes are written against their documented events, not against a real stream, and cursor reports
+no reasoning at all, so its agents will only ever show tool lines.
+
+# The run controls sit on the composer now (docs/build-plan-run-overrides.md, 2026-09-09)
+
+The gear button and its four-row panel are gone. In their place, two resting controls on the
+composer's toolbar row say what the next message will ask for, shaped after t3code's composer:
+
+**Runtime and model, in one control.** The trigger carries the runtime's own mark — Anthropic's
+starburst, OpenAI's blossom, Cursor's cube, OpenCode's block — and the model's display name, so
+"which brain answers this" is readable without opening anything. Opening it gives a 360×346 panel:
+a 44px icon rail of the four runtimes on the left, a search box and the model list on the right.
+The rail is browsing state, not a choice; picking a model on a different runtime sets the runtime
+override and drops the seat and effort that belonged to the old one. The rail's top entry is
+`Agent default`, which clears every override at once — the old Reset button, in the place your eye
+already goes. The panel's footer says when the list is the built-in one and why.
+
+**Reasoning and seat, in one menu.** The trigger is the current values joined by a dot ("Auto",
+"High", "High · Claude Code — Acme"). The menu is two radio groups, each opening on its default row
+with a `Default` badge, and each effort keeps the one-line blurb it always had.
+
+Nothing about the model changed: an absent field still means "whatever the agent is set to", the
+override still rides the message and still lasts for this conversation only, and `permissionMode`
+still has no control (D9).
+
+**New:** `run-controls.tsx`, `composer-control.tsx`, `runtime-icon.tsx` (marks adapted from t3code,
+MIT). **Gone:** `run-settings.tsx`. `CommandInput` gained a `wrapperClassName` so the search row can
+drop its border and box.
+
+**Verified in a browser** (Claude in Chrome, 2026-09-09): DM to @bruno — the picker opens on Claude
+Code with one rail marker, switching the rail to Codex lists GPT-5 Codex/GPT-5/o4-mini with the
+built-in-list note, picking one moves the trigger to the OpenAI mark and resets reasoning to Auto,
+the search box takes focus on open (typing "haiku" narrows to Claude Haiku 4.5, Enter selects it),
+`Agent default` puts everything back, and the thread composer at ~340px still fits both controls
+and Send. `pnpm typecheck` and `pnpm lint` clean for `@taut/web`.

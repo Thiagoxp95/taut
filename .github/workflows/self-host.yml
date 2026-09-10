@@ -1,0 +1,54 @@
+name: Self-host deployment
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  self-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter '@taut/server...' --filter '@taut/web...'
+      - run: pnpm exec turbo build --filter=@taut/server --filter=@taut/web
+      - run: node --test scripts/test/self-host.test.mjs scripts/test/production-onboarding.test.mjs
+      - name: Build and start a fresh installation
+        run: |
+          node scripts/self-host.mjs init "$RUNNER_TEMP/taut-instance" --port 3080
+          node scripts/self-host.mjs up "$RUNNER_TEMP/taut-instance"
+      - name: Verify onboarding, agent files and network, and persistence
+        run: TAUT_SELF_HOST_TEST_DIR="$RUNNER_TEMP/taut-instance" node --test scripts/test/container-onboarding.test.mjs
+      - name: Verify Docker namespace isolation
+        run: |
+          agent_image=$(node -e 'console.log(require(process.argv[1]).services.taut.environment.TAUT_AGENT_IMAGE)' "$RUNNER_TEMP/taut-instance/compose.json")
+          TAUT_TEST_DOCKER=1 TAUT_TEST_DOCKER_IMAGE="$agent_image" pnpm --filter @taut/runtime exec vitest run test/docker-namespace.test.ts
+      - name: Stop test installation
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/taut-instance/installation.json" ]; then
+            node scripts/self-host.mjs stop "$RUNNER_TEMP/taut-instance"
+          fi
+
+  railway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter '@taut/server...'
+      - name: Build Railway image for Linux AMD64
+        run: docker build -f deploy/railway/Dockerfile -t taut/railway:test .
+      - name: Verify shared agents, browser, and persistent replacement
+        run: TAUT_RAILWAY_TEST_IMAGE=taut/railway:test node --test scripts/test/railway-onboarding.test.mjs

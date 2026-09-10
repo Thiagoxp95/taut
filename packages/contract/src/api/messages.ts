@@ -1,3 +1,4 @@
+import { ComponentAnswer } from '../domain/component.js'
 import { HttpApiEndpoint, HttpApiGroup } from '@effect/platform'
 import { Schema } from 'effect'
 
@@ -116,6 +117,36 @@ export class MessagesGroup extends HttpApiGroup.make('messages')
       .addSuccess(Message)
       .addError(NotFound)
       .addError(Forbidden)
+  )
+  .add(
+    HttpApiEndpoint.get('authorization', '/:messageId/authorization')
+      .setPath(MessagePath)
+      .addSuccess(Schema.Struct({ canDecide: Schema.Boolean }))
+      .addError(NotFound)
+      .addError(Forbidden)
+  )
+  .add(
+    HttpApiEndpoint.post('decideAuthorization', '/:messageId/authorization')
+      .setPath(MessagePath)
+      .setPayload(Schema.Struct({ decision: Schema.Literal('approve', 'decline') }))
+      .addSuccess(Message)
+      .addError(NotFound)
+      .addError(Forbidden)
+      .addError(Conflict)
+  )
+  .add(
+    HttpApiEndpoint.post('answerComponent', '/:messageId/component/answer')
+      .setPath(MessagePath)
+      .setPayload(
+        Schema.Struct({
+          answers: Schema.Array(ComponentAnswer).pipe(Schema.minItems(1), Schema.maxItems(4))
+        })
+      )
+      .addSuccess(Message)
+      .addError(NotFound)
+      .addError(Forbidden)
+      .addError(Validation)
+      .addError(Conflict)
   )
   .middleware(Authentication)
   .prefix('/messages') {}

@@ -18,6 +18,30 @@ import { AgentId, DepartmentId, RepositoryId, SubscriptionId } from '../ids.js'
 import { Page, PageQuery } from './common.js'
 import { Authentication } from './middleware.js'
 
+/** Authentication values are write-only; responses expose header names only. */
+export const AgentConnector = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  url: Schema.String,
+  headerNames: Schema.Array(Schema.String)
+})
+export type AgentConnector = typeof AgentConnector.Type
+
+export const ConnectorInput = Schema.Struct({
+  name: Schema.String,
+  url: Schema.String,
+  headers: Schema.Record({ key: Schema.String, value: Schema.String })
+})
+export type ConnectorInput = typeof ConnectorInput.Type
+
+export const UpdateConnectorInput = Schema.Struct({
+  name: Schema.String,
+  url: Schema.String,
+  /** Omit to keep saved authentication; an empty object clears all headers. */
+  headers: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String }))
+})
+export type UpdateConnectorInput = typeof UpdateConnectorInput.Type
+
 export const CreateAgentPayload = Schema.Struct({
   handle: Handle,
   name: DisplayName,
@@ -30,6 +54,7 @@ export const CreateAgentPayload = Schema.Struct({
   permissionMode: Schema.optionalWith(PermissionMode, { default: () => 'plan' as const }),
   /** Headless browser inside the agent's machine. Defaults to `false`. */
   browserAccess: Schema.optional(Schema.Boolean),
+  connectors: Schema.optional(Schema.Array(ConnectorInput)),
   /**
    * Department the agent joins on creation (it becomes a member of that department and
    * its channels). Admin+ or that department's head may set it; without it, admin+ only.
@@ -68,7 +93,8 @@ export const AgentDetail = Schema.Struct({
   skills: Schema.Array(AgentSkill),
   fileGrants: Schema.Array(AgentFileGrant),
   /** Repositories this agent may use (docs/build-plan-repositories.md D1). */
-  repoGrants: Schema.Array(AgentRepoGrant)
+  repoGrants: Schema.Array(AgentRepoGrant),
+  connectors: Schema.optionalWith(Schema.Array(AgentConnector), { default: () => [] })
 })
 export type AgentDetail = typeof AgentDetail.Type
 
@@ -147,6 +173,7 @@ export const FileContent = Schema.Uint8ArrayFromSelf.pipe(
 )
 
 const AgentPath = Schema.Struct({ agentId: AgentId })
+const ConnectorPath = Schema.Struct({ agentId: AgentId, connectorId: Schema.String })
 const SkillPath = Schema.Struct({ agentId: AgentId, name: Handle })
 const AgentRepoPath = Schema.Struct({ agentId: AgentId, repositoryId: RepositoryId })
 
@@ -180,6 +207,30 @@ export class AgentsGroup extends HttpApiGroup.make('agents')
   .add(
     HttpApiEndpoint.del('delete', '/:agentId')
       .setPath(AgentPath)
+      .addError(NotFound)
+      .addError(Forbidden)
+  )
+  .add(
+    HttpApiEndpoint.post('addConnector', '/:agentId/connectors')
+      .setPath(AgentPath)
+      .setPayload(ConnectorInput)
+      .addSuccess(AgentConnector, { status: 201 })
+      .addError(NotFound)
+      .addError(Forbidden)
+      .addError(Validation)
+  )
+  .add(
+    HttpApiEndpoint.put('updateConnector', '/:agentId/connectors/:connectorId')
+      .setPath(ConnectorPath)
+      .setPayload(UpdateConnectorInput)
+      .addSuccess(AgentConnector)
+      .addError(NotFound)
+      .addError(Forbidden)
+      .addError(Validation)
+  )
+  .add(
+    HttpApiEndpoint.del('removeConnector', '/:agentId/connectors/:connectorId')
+      .setPath(ConnectorPath)
       .addError(NotFound)
       .addError(Forbidden)
   )

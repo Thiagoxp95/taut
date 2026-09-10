@@ -1,10 +1,10 @@
 import * as React from 'react'
-import { Loader2Icon } from 'lucide-react'
+import { Loader2Icon } from '@taut/ui/components/icons'
 import type { ChannelId, Message, MessageId } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 import { Skeleton } from '@taut/ui/components/skeleton'
-import { MessageBubble, type MessageAuthor } from '@/components/message-bubble'
-import { useLookupMember } from '@/hooks/use-directory'
+import { MessageBubble } from '@/components/message-bubble'
+import { useMessageAuthor } from '@/hooks/use-directory'
 import { useDeleteMessage, useEditMessage, useMe, useTasks } from '@/lib/api'
 import { dayKey, formatDay, toMillis } from '@/lib/format'
 
@@ -18,14 +18,6 @@ const FLASH_CLASS = 'taut-flash'
 
 const prefersReducedMotion = (): boolean =>
   typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-
-const UNKNOWN: MessageAuthor = {
-  kind: 'user',
-  name: 'Unknown member',
-  handle: 'unknown',
-  avatar: { kind: 'emoji', value: '👤' },
-  subtitle: ''
-}
 
 function DayDivider({ value }: { value: Message['createdAt'] }) {
   return (
@@ -113,7 +105,7 @@ export function MessageList({
   empty
 }: MessageListProps) {
   const me = useMe().data
-  const lookup = useLookupMember()
+  const authorOf = useMessageAuthor()
   const editMessage = useEditMessage()
   const deleteMessage = useDeleteMessage()
   const scheduledIds = useScheduledMessages(channelId)
@@ -237,19 +229,7 @@ export function MessageList({
       ) : (
         <div className="pb-4">
           {rows.map(({ message, newDay, grouped }) => {
-            const member = lookup(message.authorId)
-            const author: MessageAuthor =
-              member === undefined
-                ? UNKNOWN
-                : {
-                    kind: member.kind,
-                    name: member.name,
-                    handle: member.handle,
-                    avatar: member.avatar,
-                    face: member.face,
-                    subtitle: member.subtitle,
-                    archived: member.kind === 'agent' && member.archived
-                  }
+            const author = authorOf(message)
             const own = message.authorKind === 'user' && message.authorId === me?.user.id
 
             return (

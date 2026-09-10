@@ -1,4 +1,4 @@
-import { SmilePlusIcon } from 'lucide-react'
+import { SmilePlusIcon } from '@taut/ui/components/icons'
 import type { Message } from '@taut/contract'
 import { cn } from '@taut/ui/lib/utils'
 import { ReactionPicker } from '@/components/reaction-picker'

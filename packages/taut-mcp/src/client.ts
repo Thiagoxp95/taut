@@ -1,3 +1,4 @@
+import type { RenderComponentRequest } from '@taut/contract/domain'
 /**
  * Thin typed HTTP client over `AgentRuntimeRoutes`. Reads `TAUT_URL` / `TAUT_TOKEN` (and the
  * optional `TAUT_TASK_ID` / `TAUT_THREAD_ID`) from config — this is the only place env is read.
@@ -8,6 +9,19 @@ import { Config, Effect, Option, Redacted, Schema } from 'effect'
 import type { ParseResult } from 'effect'
 import { AGENT_RUNTIME_PREFIX, AgentRuntimeRoutes, ErrorBody, SteerItem } from './protocol.js'
 import type {
+  AgentSearchRequest,
+  AgentSearchResponse,
+  ProposeMandateRequest,
+  ProposeMandateResponse,
+  CanvasCreateRequest,
+  CanvasCreateResponse,
+  CanvasUpdateRequest,
+  CanvasUpdateResponse,
+  CanvasOpenRequest,
+  CanvasOpenResponse,
+  CanvasCloseRequest,
+  CanvasCloseResponse,
+  CanvasListResponse,
   AskCreated,
   AskRequest,
   AskStatus,
@@ -32,6 +46,9 @@ import type {
   GitCredentialResponse,
   CreateIssueRequest,
   CreateIssueResponse,
+  GetIssueRequest,
+  IssueSummary,
+  UpdateIssueRequest,
   LinearProjectsQuery,
   LinearProjectsResponse,
   OpenPullRequestRequest,
@@ -45,6 +62,8 @@ import type {
   ReactRequest,
   ReactResponse,
   Route,
+  DeleteRequest,
+  DeleteResponse,
   SendRequest,
   SendResult,
   SkillInstallRequest,
@@ -198,10 +217,17 @@ export class TautClient extends Effect.Service<TautClient>()('@taut/taut-mcp/Tau
     const R = AgentRuntimeRoutes
     return {
       env,
+      agentSearch: (
+        input: AgentSearchRequest = {}
+      ): Effect.Effect<WithSteer<AgentSearchResponse>, TautClientError> =>
+        call(R.agentSearch, input),
       send: (input: SendRequest): Effect.Effect<WithSteer<SendResult>, TautClientError> =>
         call(R.send, input),
+      delete: (input: DeleteRequest): Effect.Effect<WithSteer<DeleteResponse>, TautClientError> =>
+        call(R.delete, input),
       inbox: (input: InboxQuery = {}): Effect.Effect<InboxResponse, TautClientError> =>
         call(R.inbox, input),
+      renderComponent: (input: RenderComponentRequest) => call(R.renderComponent, input),
       ask: (input: AskRequest): Effect.Effect<AskCreated, TautClientError> => call(R.ask, input),
       askStatus: (askId: string, waitMs?: number): Effect.Effect<AskStatus, TautClientError> =>
         call(R.askStatus, waitMs === undefined ? {} : { wait: Math.trunc(waitMs) }, { id: askId }),
@@ -212,6 +238,27 @@ export class TautClient extends Effect.Service<TautClient>()('@taut/taut-mcp/Tau
       ): Effect.Effect<WithSteer<HandoffResponse>, TautClientError> => call(R.handoff, input),
       react: (input: ReactRequest): Effect.Effect<WithSteer<ReactResponse>, TautClientError> =>
         call(R.react, input),
+      proposeMandate: (
+        input: ProposeMandateRequest
+      ): Effect.Effect<WithSteer<ProposeMandateResponse>, TautClientError> =>
+        call(R.proposeMandate, input),
+      canvasCreate: (
+        input: CanvasCreateRequest
+      ): Effect.Effect<WithSteer<CanvasCreateResponse>, TautClientError> =>
+        call(R.canvasCreate, input),
+      canvasUpdate: (
+        input: CanvasUpdateRequest
+      ): Effect.Effect<WithSteer<CanvasUpdateResponse>, TautClientError> =>
+        call(R.canvasUpdate, input),
+      canvasOpen: (
+        input: CanvasOpenRequest
+      ): Effect.Effect<WithSteer<CanvasOpenResponse>, TautClientError> => call(R.canvasOpen, input),
+      canvasClose: (
+        input: CanvasCloseRequest
+      ): Effect.Effect<WithSteer<CanvasCloseResponse>, TautClientError> =>
+        call(R.canvasClose, input),
+      canvasList: (): Effect.Effect<WithSteer<CanvasListResponse>, TautClientError> =>
+        call(R.canvasList, {}),
       memorySearch: (input: MemorySearchRequest): Effect.Effect<MemoryHits, TautClientError> =>
         call(R.memorySearch, input),
       memoryGrep: (input: MemoryGrepRequest): Effect.Effect<MemoryItems, TautClientError> =>
@@ -270,6 +317,12 @@ export class TautClient extends Effect.Service<TautClient>()('@taut/taut-mcp/Tau
       linearCreateIssue: (
         input: CreateIssueRequest
       ): Effect.Effect<CreateIssueResponse, TautClientError> => call(R.linearCreateIssue, input),
+      /** One ticket, and one change to it (docs/build-plan-issues.md D18). */
+      linearGetIssue: (input: GetIssueRequest): Effect.Effect<IssueSummary, TautClientError> =>
+        call(R.linearGetIssue, input),
+      linearUpdateIssue: (
+        input: UpdateIssueRequest
+      ): Effect.Effect<IssueSummary, TautClientError> => call(R.linearUpdateIssue, input),
       /** Signals (docs/build-plan-triggers.md Part II): arm, list, and take one back. */
       emitSignal: (input: EmitSignalRequest): Effect.Effect<EmitSignalResponse, TautClientError> =>
         call(R.emitSignal, input),

@@ -27,10 +27,12 @@ import type { ToolName } from './tools.js'
 export const USAGE = `taut — talk to your Taut workspace (env: TAUT_URL, TAUT_TOKEN)
 
   taut send <@handle|#channel> <text…>      [--thread <id>] [--attach a,b]
+  taut delete <messageId>                  remove your own message or obsolete approval card
   taut inbox                                [--since <seq>]
   taut ask <@handle> <question…>            [--timeout <sec≤45>]
   taut done <summary…>                      [--failed] [--files a,b] [--attach a,b]
   taut handoff <@handle> <spec…>
+  taut agents [query…]                      find same-department specialists [--limit n]
   taut react <messageId> <emoji>            [--off]        react instead of writing a reply
   taut mem search <query…>                  [--limit n] [--since iso] [--until iso] [--channel id] [--kind k] [--author id]
   taut mem grep <pattern>                   [--limit n] [--since iso] [--until iso] [--channel id] [--kind k] [--flags f]
@@ -135,6 +137,12 @@ export const parseArgs = (argv: ReadonlyArray<string>): Parsed => {
   const text = (from: number) => rest.slice(from).join(' ')
 
   switch (cmd) {
+    case 'agents':
+      return tool(
+        'taut_agent_search',
+        { query: rest.length === 0 ? undefined : text(0), limit: num(f, 'limit') },
+        json
+      )
     case 'send':
       if (rest.length < 2) return error('send needs <to> and <text>')
       return tool(
@@ -142,6 +150,9 @@ export const parseArgs = (argv: ReadonlyArray<string>): Parsed => {
         { to: rest[0], text: text(1), threadId: str(f, 'thread'), attachments: list(f, 'attach') },
         json
       )
+    case 'delete':
+      if (rest.length !== 1) return error('delete needs <messageId>')
+      return tool('taut_delete', { messageId: rest[0] }, json)
     case 'inbox':
       return tool('taut_inbox', { since: num(f, 'since') }, json)
     case 'ask':
@@ -318,6 +329,8 @@ const renderHuman = (name: ToolName, r: Record<string, unknown>): string => {
       return r['posted'] === false
         ? `not posted — steered: ${String(r['hint'])}`
         : `sent ${String(r['messageId'])} (seq ${String(r['seq'])})`
+    case 'taut_delete':
+      return `deleted ${String(r['messageId'])}`
     case 'taut_inbox': {
       const rows = (items ?? []) as ReadonlyArray<InboxMessage>
       return rows.length === 0

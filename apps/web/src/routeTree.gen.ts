@@ -13,6 +13,7 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as AuthRouteImport } from './routes/_auth'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
 import { Route as AppHandoversRouteImport } from './routes/_app.handovers'
+import { Route as AppInboxRouteImport } from './routes/_app.inbox'
 import { Route as AppMembersRouteImport } from './routes/_app.members'
 import { Route as AppSubscriptionsRouteImport } from './routes/_app.subscriptions'
 import { Route as AppTasksRouteImport } from './routes/_app.tasks'
@@ -26,6 +27,7 @@ import { Route as AppAgentsAgentIdRouteImport } from './routes/_app.agents.$agen
 import { Route as AppAgentsNewRouteImport } from './routes/_app.agents.new'
 import { Route as AppCChannelIdRouteImport } from './routes/_app.c.$channelId'
 import { Route as AppDmChannelIdRouteImport } from './routes/_app.dm.$channelId'
+import { Route as AppIssuesIssueIdRouteImport } from './routes/_app.issues.$issueId'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app.projects.index'
 import { Route as AppProjectsProjectIdRouteImport } from './routes/_app.projects.$projectId'
 import { Route as AppSettingsCompanyRouteImport } from './routes/_app.settings.company'
@@ -51,6 +53,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
 const AppHandoversRoute = AppHandoversRouteImport.update({
   id: '/handovers',
   path: '/handovers',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppInboxRoute = AppInboxRouteImport.update({
+  id: '/inbox',
+  path: '/inbox',
   getParentRoute: () => AppRoute,
 } as any)
 const AppMembersRoute = AppMembersRouteImport.update({
@@ -118,6 +125,11 @@ const AppDmChannelIdRoute = AppDmChannelIdRouteImport.update({
   path: '/dm/$channelId',
   getParentRoute: () => AppRoute,
 } as any)
+const AppIssuesIssueIdRoute = AppIssuesIssueIdRouteImport.update({
+  id: '/issues/$issueId',
+  path: '/issues/$issueId',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
   id: '/projects/',
   path: '/projects/',
@@ -164,6 +176,7 @@ const AppDepartmentsDepartmentIdSettingsRoute =
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/handovers': typeof AppHandoversRoute
+  '/inbox': typeof AppInboxRoute
   '/members': typeof AppMembersRoute
   '/subscriptions': typeof AppSubscriptionsRoute
   '/tasks': typeof AppTasksRoute
@@ -176,6 +189,7 @@ export interface FileRoutesByFullPath {
   '/agents/new': typeof AppAgentsNewRoute
   '/c/$channelId': typeof AppCChannelIdRoute
   '/dm/$channelId': typeof AppDmChannelIdRoute
+  '/issues/$issueId': typeof AppIssuesIssueIdRoute
   '/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/settings/company': typeof AppSettingsCompanyRoute
   '/settings/linear': typeof AppSettingsLinearRoute
@@ -189,6 +203,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/handovers': typeof AppHandoversRoute
+  '/inbox': typeof AppInboxRoute
   '/members': typeof AppMembersRoute
   '/subscriptions': typeof AppSubscriptionsRoute
   '/tasks': typeof AppTasksRoute
@@ -201,6 +216,7 @@ export interface FileRoutesByTo {
   '/agents/new': typeof AppAgentsNewRoute
   '/c/$channelId': typeof AppCChannelIdRoute
   '/dm/$channelId': typeof AppDmChannelIdRoute
+  '/issues/$issueId': typeof AppIssuesIssueIdRoute
   '/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/settings/company': typeof AppSettingsCompanyRoute
   '/settings/linear': typeof AppSettingsLinearRoute
@@ -216,6 +232,7 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/_auth': typeof AuthRouteWithChildren
   '/_app/handovers': typeof AppHandoversRoute
+  '/_app/inbox': typeof AppInboxRoute
   '/_app/members': typeof AppMembersRoute
   '/_app/subscriptions': typeof AppSubscriptionsRoute
   '/_app/tasks': typeof AppTasksRoute
@@ -229,6 +246,7 @@ export interface FileRoutesById {
   '/_app/agents/new': typeof AppAgentsNewRoute
   '/_app/c/$channelId': typeof AppCChannelIdRoute
   '/_app/dm/$channelId': typeof AppDmChannelIdRoute
+  '/_app/issues/$issueId': typeof AppIssuesIssueIdRoute
   '/_app/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/_app/settings/company': typeof AppSettingsCompanyRoute
   '/_app/settings/linear': typeof AppSettingsLinearRoute
@@ -244,6 +262,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/handovers'
+    | '/inbox'
     | '/members'
     | '/subscriptions'
     | '/tasks'
@@ -256,6 +275,7 @@ export interface FileRouteTypes {
     | '/agents/new'
     | '/c/$channelId'
     | '/dm/$channelId'
+    | '/issues/$issueId'
     | '/projects/$projectId'
     | '/settings/company'
     | '/settings/linear'
@@ -269,6 +289,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/handovers'
+    | '/inbox'
     | '/members'
     | '/subscriptions'
     | '/tasks'
@@ -281,6 +302,7 @@ export interface FileRouteTypes {
     | '/agents/new'
     | '/c/$channelId'
     | '/dm/$channelId'
+    | '/issues/$issueId'
     | '/projects/$projectId'
     | '/settings/company'
     | '/settings/linear'
@@ -295,6 +317,7 @@ export interface FileRouteTypes {
     | '/_app'
     | '/_auth'
     | '/_app/handovers'
+    | '/_app/inbox'
     | '/_app/members'
     | '/_app/subscriptions'
     | '/_app/tasks'
@@ -308,6 +331,7 @@ export interface FileRouteTypes {
     | '/_app/agents/new'
     | '/_app/c/$channelId'
     | '/_app/dm/$channelId'
+    | '/_app/issues/$issueId'
     | '/_app/projects/$projectId'
     | '/_app/settings/company'
     | '/_app/settings/linear'
@@ -353,6 +377,13 @@ declare module '@tanstack/react-router' {
       path: '/handovers'
       fullPath: '/handovers'
       preLoaderRoute: typeof AppHandoversRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/inbox': {
+      id: '/_app/inbox'
+      path: '/inbox'
+      fullPath: '/inbox'
+      preLoaderRoute: typeof AppInboxRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/members': {
@@ -446,6 +477,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDmChannelIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/issues/$issueId': {
+      id: '/_app/issues/$issueId'
+      path: '/issues/$issueId'
+      fullPath: '/issues/$issueId'
+      preLoaderRoute: typeof AppIssuesIssueIdRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/projects/': {
       id: '/_app/projects/'
       path: '/projects'
@@ -507,6 +545,7 @@ declare module '@tanstack/react-router' {
 
 interface AppRouteChildren {
   AppHandoversRoute: typeof AppHandoversRoute
+  AppInboxRoute: typeof AppInboxRoute
   AppMembersRoute: typeof AppMembersRoute
   AppSubscriptionsRoute: typeof AppSubscriptionsRoute
   AppTasksRoute: typeof AppTasksRoute
@@ -516,6 +555,7 @@ interface AppRouteChildren {
   AppAgentsNewRoute: typeof AppAgentsNewRoute
   AppCChannelIdRoute: typeof AppCChannelIdRoute
   AppDmChannelIdRoute: typeof AppDmChannelIdRoute
+  AppIssuesIssueIdRoute: typeof AppIssuesIssueIdRoute
   AppProjectsProjectIdRoute: typeof AppProjectsProjectIdRoute
   AppSettingsCompanyRoute: typeof AppSettingsCompanyRoute
   AppSettingsLinearRoute: typeof AppSettingsLinearRoute
@@ -528,6 +568,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppHandoversRoute: AppHandoversRoute,
+  AppInboxRoute: AppInboxRoute,
   AppMembersRoute: AppMembersRoute,
   AppSubscriptionsRoute: AppSubscriptionsRoute,
   AppTasksRoute: AppTasksRoute,
@@ -537,6 +578,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAgentsNewRoute: AppAgentsNewRoute,
   AppCChannelIdRoute: AppCChannelIdRoute,
   AppDmChannelIdRoute: AppDmChannelIdRoute,
+  AppIssuesIssueIdRoute: AppIssuesIssueIdRoute,
   AppProjectsProjectIdRoute: AppProjectsProjectIdRoute,
   AppSettingsCompanyRoute: AppSettingsCompanyRoute,
   AppSettingsLinearRoute: AppSettingsLinearRoute,

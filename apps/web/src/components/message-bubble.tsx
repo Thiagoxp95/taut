@@ -1,19 +1,38 @@
+import { InlineMessageComponent } from '@/components/message-component'
+import { MemberProfileTrigger } from '@/components/profile-card'
 import * as React from 'react'
-import { AlarmClockIcon, AlertTriangleIcon, ChevronRightIcon, RotateCcwIcon } from 'lucide-react'
+import {
+  AlarmClockIcon,
+  AlertTriangleIcon,
+  ChevronRightIcon,
+  Loader2Icon,
+  PauseIcon,
+  RotateCcwIcon
+} from '@taut/ui/components/icons'
 import type { Avatar as AvatarValue, MemberKind, Message, ThreadSummary } from '@taut/contract'
+import { TaskId } from '@taut/contract'
 import { cn } from '@taut/ui/lib/utils'
 import { Button } from '@taut/ui/components/button'
-import { AgentFigure } from '@/components/agent-figure'
 import { AttachmentList } from '@/components/attachment-list'
 import { ContextMeter } from '@/components/context-meter'
 import { EntityAvatar } from '@/components/entity-avatar'
+import { MessageAuthorization } from '@/components/message-authorization'
 import { MessageActions } from '@/components/message-actions'
 import { ReactionChips } from '@/components/reaction-chips'
 import { RichText } from '@/components/rich-text'
 import { useLookupMember } from '@/hooks/use-directory'
 import type { AgentFace } from '@/lib/agent-avatar'
+import { useCancelTask } from '@/lib/api'
 import { formatRelative, formatTime, toIso } from '@/lib/format'
-import { useIsInvoking, useMessageError, useThreadContext } from '@/lib/live'
+import {
+  type Activity,
+  type ThreadRun,
+  useThreadRuns,
+  useMessageActivity,
+  useMessageTaskId,
+  useMessageError,
+  useThreadContext
+} from '@/lib/live'
 import { rememberRecentEmoji, useToggleReaction } from '@/lib/message-actions'
 
 export interface MessageAuthor {
@@ -39,91 +58,148 @@ const UNKNOWN_AUTHOR: MessageAuthor = {
 /** How many faces the reply bar shows before it stops counting. */
 const FACES = 5
 
-/** The placeholder orb's size. At or under 24 the library paints its sparse inline preset. */
-const ORB_PX = 20
-
-/**
- * Slack's reply bar: the avatars of everyone who answered, the count, and how
- * long ago the last reply landed. Only a root message with replies gets one.
- *
- * `working` is the run this message set off still being in flight — the same
- * signal that shimmers the body. The agent faces here morph into their orb for
- * exactly that long, which is the one place an unopened thread says an answer
- * is on its way.
- */
+/** The reply entry stays visible while an agent prepares its first answer. */
 function ThreadReplies({
   thread,
-  working,
+  threadId,
   onOpen
 }: {
-  thread: ThreadSummary
-  working: boolean
+  thread?: ThreadSummary
+  threadId: string
   onOpen: () => void
 }) {
   const lookup = useLookupMember()
-  const faces = thread.participants.slice(0, FACES)
-  const label = `${thread.replyCount} ${thread.replyCount === 1 ? 'reply' : 'replies'}`
+  const runs = useThreadRuns(threadId)
+  if (thread === undefined && runs.length === 0) return null
+  const participants: Array<{ kind: MemberKind; id: string }> = [...(thread?.participants ?? [])]
+  for (const run of runs) {
+    if (!participants.some((participant) => participant.id === run.agentId)) {
+      participants.push({ kind: 'agent', id: run.agentId })
+    }
+  }
+  const faces = participants.slice(0, FACES)
+  // The server summary already counts streaming placeholders; never add them twice.
+  const count = Math.max(thread?.replyCount ?? 0, runs.length)
+  const label = `${count} ${count === 1 ? 'reply' : 'replies'}`
 
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-label={`${label} — open thread`}
-      className="group/thread mt-1.5 -ml-1 flex w-fit max-w-full items-center gap-2 rounded-md border border-transparent px-1.5 py-1 text-left transition-colors hover:border-border hover:bg-background"
-    >
-      <span className="flex -space-x-1">
-        {faces.map((participant) => {
-          const member = lookup(participant.id)
-          return (
-            <EntityAvatar
-              key={`${participant.kind}-${participant.id}`}
-              avatar={member?.avatar ?? UNKNOWN_AUTHOR.avatar}
-              kind={participant.kind}
-              face={member?.face}
-              working={working}
-              name={member?.name ?? ''}
-              size="sm"
-              className="ring-2 ring-background"
-            />
-          )
-        })}
-      </span>
+    <div className="mt-1.5 -ml-1 flex w-full min-w-0 items-center gap-2">
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`${label}${runs.length > 0 ? ' — reply in progress' : ''} — open thread`}
+        className="group/thread flex w-fit max-w-full shrink-0 items-center gap-2 rounded-md border border-transparent px-1.5 py-1 text-left transition-colors hover:border-border hover:bg-background focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      >
+        <span className="flex shrink-0 -space-x-1">
+          {faces.map((participant) => {
+            const member = lookup(participant.id)
+            return (
+              <EntityAvatar
+                memberId={participant.id}
+                key={`${participant.kind}-${participant.id}`}
+                avatar={member?.avatar ?? UNKNOWN_AUTHOR.avatar}
+                kind={participant.kind}
+                face={member?.face}
+                working={runs.some((run) => run.agentId === participant.id)}
+                name={member?.name ?? ''}
+                size="sm"
+                className="ring-2 ring-background"
+              />
+            )
+          })}
+        </span>
 
-      <span className="text-[13px] font-semibold text-sidebar-primary group-hover/thread:underline dark:text-sidebar-primary-foreground">
-        {label}
-      </span>
+        <span className="shrink-0 text-[13px] font-semibold text-sidebar-primary group-hover/thread:underline dark:text-sidebar-primary-foreground">
+          {label}
+        </span>
 
-      <span className="truncate text-[11px] text-muted-foreground group-hover/thread:hidden">
-        Last reply {formatRelative(thread.lastReplyAt)}
-      </span>
-      <span className="hidden items-center gap-0.5 text-[11px] text-muted-foreground group-hover/thread:flex">
-        View thread
-        <ChevronRightIcon className="size-3" />
-      </span>
-    </button>
+        {runs.length === 0 && (
+          <>
+            <span className="truncate text-[11px] text-muted-foreground group-hover/thread:hidden">
+              {thread === undefined ? null : `Last reply ${formatRelative(thread.lastReplyAt)}`}
+            </span>
+            <span className="hidden items-center gap-0.5 text-[11px] text-muted-foreground group-hover/thread:flex">
+              View thread
+              <ChevronRightIcon className="size-3" />
+            </span>
+          </>
+        )}
+      </button>
+      {runs.length > 0 && (
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          {runs.map((run) => (
+            <ThreadReplyActivity key={run.messageId} run={run} />
+          ))}
+        </span>
+      )}
+    </div>
   )
 }
 
+function ThreadReplyActivity({ run }: { run: ThreadRun }) {
+  const lookup = useLookupMember()
+  const activity = useMessageActivity(run.messageId)
+  const author = lookup(run.agentId) ?? { ...UNKNOWN_AUTHOR, name: 'Agent' }
+  return <AgentActivityLine author={author} activity={activity} messageId={run.messageId} />
+}
+
 /**
- * What stands in for the reply until its first token lands: the agent's orb at
- * the inline preset — the loose, floaty dots of a small avatar rather than the
- * dense sphere the 40px preset paints — sitting on the line the text will take.
- * The caret alone left the row looking empty, which read as a stalled reply.
+ * One temporary line beside the working avatar. Each update replaces the previous one;
+ * the completed reply replaces the entire row.
  */
-function ThinkingPlaceholder({ author }: { author: MessageAuthor }) {
+function AgentActivityLine({
+  author,
+  activity,
+  messageId
+}: {
+  author: MessageAuthor
+  activity: Activity | undefined
+  messageId: string
+}) {
+  const taskId = useMessageTaskId(messageId)
+  const cancelTask = useCancelTask()
+  const stopping = cancelTask.isPending || cancelTask.isSuccess
+  const label = stopping ? `Stopping ${author.name}…` : `Interrupt ${author.name}`
+  const text =
+    activity === undefined ? `${author.name} is working…` : `${author.name} · ${activity.text}`
   return (
-    <div
-      role="status"
-      aria-label={`${author.name} is thinking`}
-      className="flex min-h-[1lh] items-center"
-    >
-      <AgentFigure
-        seed={author.face?.seed ?? author.name}
-        shape={author.face?.shape}
-        working
-        px={ORB_PX}
-      />
-    </div>
+    <span className="flex min-w-0 flex-1 flex-col">
+      <span className="flex min-w-0 items-center gap-3">
+        <span
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="taut-activity min-w-0 flex-1"
+        >
+          <span className="shimmer block truncate text-sm italic text-muted-foreground">
+            {text}
+          </span>
+        </span>
+        {taskId !== undefined && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground"
+            aria-label={label}
+            title={label}
+            disabled={stopping}
+            onClick={() => cancelTask.mutate(TaskId.make(taskId))}
+          >
+            {stopping ? (
+              <Loader2Icon aria-hidden="true" className="size-4 motion-safe:animate-spin" />
+            ) : (
+              <PauseIcon aria-hidden="true" className="size-4" />
+            )}
+          </Button>
+        )}
+      </span>
+      {cancelTask.isError && (
+        <span role="alert" className="text-xs text-destructive">
+          Could not interrupt {author.name}. {cancelTask.error.message}
+        </span>
+      )}
+    </span>
   )
 }
 
@@ -147,10 +223,8 @@ export interface MessageBubbleProps {
 }
 
 /**
- * One message row. Agent replies grow in place: `status: "streaming"` keeps a
- * caret pulsing at the end of the text and the avatar morphed into its orb. That
- * and the reply bar below are the only places the orb is drawn: everywhere else
- * a busy agent is a still face.
+ * A running agent occupies one activity row. Its completed answer gets the full message
+ * treatment; progress never acquires a timestamp, actions, or a transcript of its own.
  */
 export function MessageBubble({
   message,
@@ -170,11 +244,11 @@ export function MessageBubble({
   const failed = message.status === 'failed'
   const liveError = useMessageError(message.id)
   /**
-   * This message invoked an agent and that run is still going, so it shimmers until the agent is
-   * done (docs/build-plan-shimmer.md D2). The dim is not decoration: `tw-shimmer` cannot show its
-   * highlight on full-contrast text, so the sweep is invisible without it (D4).
+   * The running commentary under this reply, while there is a run behind it
+   * (docs/build-plan-activity.md D5). Broadcast, never stored: a reload mid-run shows the
+   * orb and waits for the next line rather than replaying the ones it missed.
    */
-  const invoking = useIsInvoking(message.id)
+  const activity = useMessageActivity(message.id)
   /**
    * How full this agent's window is *in this thread*
    * (docs/build-plan-context-meter.md D11). Only inside a thread: a message outside one belongs
@@ -201,11 +275,32 @@ export function MessageBubble({
     setDraft(null)
   }
 
+  if (streaming && message.authorKind === 'agent') {
+    return (
+      <article data-status="streaming" className="flex items-center gap-3 px-6 py-2">
+        <div className="flex w-9 shrink-0 justify-center">
+          <EntityAvatar
+            memberId={message.authorId}
+            avatar={author.avatar}
+            kind={author.kind}
+            face={author.face}
+            working
+            name={author.name}
+            size="sm"
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <AgentActivityLine author={author} activity={activity} messageId={message.id} />
+        </div>
+      </article>
+    )
+  }
+
   return (
     <article
       data-status={message.status}
       className={cn(
-        'group relative flex gap-3 px-6 transition-colors hover:bg-muted/40',
+        'group relative flex gap-3 px-4 sm:px-6 transition-colors hover:bg-muted/40',
         active && 'bg-sidebar-primary/5',
         compact ? 'py-0.5' : 'pt-3 pb-1'
       )}
@@ -221,11 +316,11 @@ export function MessageBubble({
         ) : (
           <ContextMeter context={context}>
             <EntityAvatar
+              memberId={message.authorId}
               avatar={author.avatar}
               kind={author.kind}
               face={author.face}
               working={streaming}
-              orb="composing"
               name={author.name}
               size="lg"
             />
@@ -235,8 +330,13 @@ export function MessageBubble({
 
       <div className="min-w-0 flex-1">
         {compact ? null : (
-          <div className="flex items-baseline gap-2">
-            <span className="text-sm font-semibold">{author.name}</span>
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <MemberProfileTrigger
+              memberId={message.authorId}
+              className="min-w-0 break-words text-[15px] font-semibold"
+            >
+              {author.name}
+            </MemberProfileTrigger>
             {author.kind === 'agent' ? (
               <span className="rounded-[3px] bg-muted px-1 py-px text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
                 agent
@@ -247,11 +347,11 @@ export function MessageBubble({
                 archived
               </span>
             ) : null}
-            <time dateTime={toIso(message.createdAt)} className="text-[11px] text-muted-foreground">
+            <time dateTime={toIso(message.createdAt)} className="text-xs text-muted-foreground">
               {formatTime(message.createdAt)}
             </time>
             {message.editedAt !== undefined ? (
-              <span className="text-[11px] text-muted-foreground">(edited)</span>
+              <span className="text-xs text-muted-foreground">(edited)</span>
             ) : null}
           </div>
         )}
@@ -280,7 +380,7 @@ export function MessageBubble({
                   commit()
                 }
               }}
-              className="taut-scroll block max-h-60 w-full resize-none bg-transparent text-sm leading-relaxed outline-none"
+              className="taut-scroll block max-h-60 w-full resize-none bg-transparent text-[15px] leading-[1.46667] outline-none"
             />
             <div className="mt-2 flex items-center justify-end gap-2">
               <Button variant="ghost" size="xs" onClick={() => setDraft(null)}>
@@ -292,20 +392,28 @@ export function MessageBubble({
             </div>
           </div>
         ) : thinking ? (
-          <ThinkingPlaceholder author={author} />
-        ) : attachmentsOnly ? null : (
+          <AgentActivityLine author={author} activity={activity} messageId={message.id} />
+        ) : attachmentsOnly || message.component !== undefined ? null : (
           <RichText
             source={message.body}
             caret={streaming}
-            className={cn(
-              failed && 'text-muted-foreground',
-              invoking && 'shimmer text-foreground/60'
-            )}
+            className={cn(failed && 'text-muted-foreground')}
           />
         )}
 
+        {message.component === undefined ? null : (
+          <InlineMessageComponent messageId={message.id} component={message.component} />
+        )}
+
+        {message.authorization === undefined ? null : (
+          <MessageAuthorization messageId={message.id} request={message.authorization} />
+        )}
+
         {/* Under the body, and under the editor too: editing never touches them (D7). */}
-        <AttachmentList attachments={message.attachments} />
+        <AttachmentList
+          attachments={message.attachments}
+          threadId={message.threadId ?? message.id}
+        />
 
         <ReactionChips message={message} onToggle={react} onAdd={(emoji) => react(emoji, true)} />
 
@@ -329,21 +437,20 @@ export function MessageBubble({
           </div>
         ) : null}
 
-        {message.thread === undefined || onOpenThread === undefined ? null : (
-          <ThreadReplies thread={message.thread} working={invoking} onOpen={onOpenThread} />
+        {onOpenThread === undefined ? null : (
+          <ThreadReplies thread={message.thread} threadId={message.id} onOpen={onOpenThread} />
+        )}
+        {editing ? null : (
+          <MessageActions
+            message={message}
+            own={own}
+            onEdit={onEdit === undefined ? undefined : () => setDraft(message.body)}
+            onDelete={onDelete}
+            onOpenThread={onOpenThread}
+            onReact={react}
+          />
         )}
       </div>
-
-      {editing ? null : (
-        <MessageActions
-          message={message}
-          own={own}
-          onEdit={onEdit === undefined ? undefined : () => setDraft(message.body)}
-          onDelete={onDelete}
-          onOpenThread={onOpenThread}
-          onReact={react}
-        />
-      )}
     </article>
   )
 }

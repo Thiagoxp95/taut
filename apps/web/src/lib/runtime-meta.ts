@@ -106,8 +106,7 @@ export const CREDENTIAL_LABELS: Record<CredentialKind, string> = {
 /** The one helper line under the secret field. Kind-specific, deliberately short. */
 export const CREDENTIAL_HELP: Record<CredentialKind, string> = {
   'anthropic.api_key': 'Create one at console.anthropic.com → API keys.',
-  'claude.oauth':
-    'Runs agents, but cannot read usage — a seat on this shows no limits. Prefer the Claude login.',
+  'claude.oauth': 'Connect your Claude subscription using the token from claude setup-token.',
   'claude.login':
     "Runs agents and reads this seat's limits. A shared login rather than a key — check your provider's terms.",
   'openai.api_key': 'Create one at platform.openai.com → API keys.',
@@ -135,6 +134,55 @@ export interface CredentialRecipe {
   readonly then: string
 }
 
+// Run locally, before any clipboard write: auth status can succeed without an
+// exportable login. Keep unrelated MCP credentials out of the clipboard entirely.
+const claudeLoginCommand = String.raw`node -e '
+const { spawnSync } = require("node:child_process");
+const { readFileSync } = require("node:fs");
+const { homedir } = require("node:os");
+const { join } = require("node:path");
+const config = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+const parse = (text) => {
+  try {
+    const oauth = JSON.parse(text).claudeAiOauth;
+    if (typeof oauth?.accessToken === "string" && oauth.accessToken.trim() &&
+        typeof oauth.refreshToken === "string" && oauth.refreshToken.trim()) {
+      return { claudeAiOauth: oauth };
+    }
+  } catch {}
+};
+const readLogin = () => {
+  const keychain = spawnSync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"], { encoding: "utf8" });
+  const login = keychain.status === 0 ? parse(keychain.stdout) : undefined;
+  if (login) return login;
+  try { return parse(readFileSync(join(config, ".credentials.json"), "utf8")); } catch {}
+};
+let login = readLogin();
+if (!login) {
+  console.error("No exportable Claude login found. Sign in with your Claude subscription.");
+  const result = spawnSync("claude", ["auth", "login"], { stdio: "inherit" });
+  if (result.status !== 0) {
+    console.error("Claude sign-in did not finish. Nothing was copied.");
+    process.exit(1);
+  }
+  login = readLogin();
+}
+if (!login) {
+  console.error("Claude still has no exportable access and refresh tokens. Nothing was copied. Run claude setup-token, then in Taut choose Subscription and paste the resulting token.");
+  process.exit(1);
+}
+const encoded = Buffer.from(JSON.stringify(login)).toString("base64");
+for (const [command, args] of [["pbcopy", []], ["wl-copy", []], ["xclip", ["-selection", "clipboard"]]]) {
+  const result = spawnSync(command, args, { input: encoded, stdio: ["pipe", "ignore", "ignore"] });
+  if (result.status === 0) {
+    console.error("Claude login copied. Paste it into Taut.");
+    process.exit(0);
+  }
+}
+console.error("No clipboard tool available. Copy the following line into Taut:");
+console.log(encoded);
+'`
+
 export const CREDENTIAL_RECIPE: Partial<Record<CredentialKind, CredentialRecipe>> = {
   'openai.oauth': {
     intro: 'Run this on the Mac where you use ChatGPT. It signs Codex in, then copies the login.',
@@ -148,17 +196,14 @@ export const CREDENTIAL_RECIPE: Partial<Record<CredentialKind, CredentialRecipe>
     then: 'Copy the line it prints and paste it below.'
   },
   /**
-   * Signs in if needed, then copies the login Claude Code saved — the macOS
-   * Keychain item or the file Linux writes, whichever exists. The clipboard
-   * command is whichever of the three is installed, and a machine with none
-   * (a server over SSH) gets the line printed instead of a silent no-op.
+   * Validates the saved login before copying, with one interactive sign-in
+   * attempt if neither credential store contains exportable tokens.
    */
   'claude.login': {
     intro:
-      'Run this on the machine signed in to Claude. It copies the whole login, which both runs the seat and reads its limits.',
-    command:
-      "claude auth status >/dev/null 2>&1 || claude auth login\n{ security find-generic-password -s 'Claude Code-credentials' -w 2>/dev/null || cat ~/.claude/.credentials.json; } | base64 | tr -d '\\n' | { pbcopy 2>/dev/null || wl-copy 2>/dev/null || xclip -selection clipboard 2>/dev/null || cat; }",
-    then: 'The login is on your clipboard — paste it below. If it printed a long line instead, this machine has no clipboard tool: copy that line.'
+      'Run this on the machine where you use Claude Code, with Node.js installed. It checks your saved login, signs in if needed, and copies only the Claude login.',
+    command: claudeLoginCommand,
+    then: 'When it says "Claude login copied", paste below. If it prints a long line instead, copy that line. If no login can be copied, follow the terminal instructions.'
   }
 }
 

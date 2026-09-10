@@ -1,5 +1,11 @@
 import * as React from 'react'
-import { AlertCircleIcon, CheckIcon, CopyIcon, EyeIcon, EyeOffIcon } from 'lucide-react'
+import {
+  AlertCircleIcon,
+  CheckIcon,
+  CopyIcon,
+  EyeIcon,
+  EyeOffIcon
+} from '@taut/ui/components/icons'
 import { Either } from 'effect'
 import type { CredentialKind } from '@taut/contract'
 import {
@@ -105,16 +111,22 @@ const copyText = async (text: string): Promise<boolean> => {
   }
 }
 
-function RecipeBlock({ recipe }: { recipe: CredentialRecipe }) {
+function RecipeBlock({ recipe, compact = false }: { recipe: CredentialRecipe; compact?: boolean }) {
   const [copied, setCopied] = React.useState(false)
 
   return (
-    <div className="rounded-md border bg-muted/40 p-3">
-      <p className="text-xs text-muted-foreground">{recipe.intro}</p>
+    <div className="min-w-0 rounded-md border bg-muted/40 p-3">
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {compact
+          ? 'Run this command in a terminal on the computer where you use this provider. Then paste the resulting login below.'
+          : recipe.intro}
+      </p>
       <div className="mt-2 flex items-start gap-2">
-        <pre className="min-w-0 flex-1 overflow-x-auto rounded border bg-background px-2.5 py-2 font-mono text-[11px] leading-relaxed select-all">
-          {recipe.command}
-        </pre>
+        {compact ? null : (
+          <pre className="min-w-0 flex-1 overflow-x-auto rounded border bg-background px-2.5 py-2 font-mono text-[11px] leading-relaxed select-all">
+            {recipe.command}
+          </pre>
+        )}
         <Button
           type="button"
           variant="outline"
@@ -131,10 +143,21 @@ function RecipeBlock({ recipe }: { recipe: CredentialRecipe }) {
           }}
         >
           {copied ? <CheckIcon /> : <CopyIcon />}
-          {copied ? 'Copied' : 'Copy'}
+          {copied ? 'Copied' : compact ? 'Copy login command' : 'Copy'}
         </Button>
       </div>
-      <p className="mt-2 text-xs text-muted-foreground">{recipe.then}</p>
+      {compact ? (
+        <details className="mt-3 text-xs text-muted-foreground">
+          <summary className="w-fit cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring">
+            View command
+          </summary>
+          <pre className="mt-2 max-w-full whitespace-pre-wrap break-all rounded border bg-background p-2 font-mono text-[11px] leading-relaxed select-all">
+            {recipe.command}
+          </pre>
+        </details>
+      ) : (
+        <p className="mt-2 text-xs text-muted-foreground">{recipe.then}</p>
+      )}
     </div>
   )
 }
@@ -157,13 +180,16 @@ export function SecretFields({
   onChange,
   /** Restrict the kind list — a runtime only accepts some (agent-model §4). */
   kinds,
-  autoFocus = false
+  autoFocus = false,
+  compact = false
 }: {
   idPrefix: string
   value: NewSecret
   onChange: (next: NewSecret) => void
   kinds?: readonly CredentialKind[]
   autoFocus?: boolean
+  /** Connection flows already choose a method and name the account. */
+  compact?: boolean
 }) {
   const [revealed, setRevealed] = React.useState(false)
 
@@ -181,49 +207,57 @@ export function SecretFields({
 
   return (
     <>
-      <Field label="Kind" htmlFor={`${idPrefix}-kind`}>
-        <Select
-          value={value.kind}
-          onValueChange={(next) => {
-            if (isCredentialKind(next)) onChange({ ...value, kind: next })
-          }}
+      {compact ? null : (
+        <Field label="Kind" htmlFor={`${idPrefix}-kind`}>
+          <Select
+            value={value.kind}
+            onValueChange={(next) => {
+              if (isCredentialKind(next)) onChange({ ...value, kind: next })
+            }}
+          >
+            <SelectTrigger id={`${idPrefix}-kind`} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {groups.map((group) => (
+                <SelectGroup key={group.label}>
+                  <SelectLabel>{group.label}</SelectLabel>
+                  {group.kinds.map((kind) => (
+                    <SelectItem key={kind} value={kind}>
+                      {CREDENTIAL_LABELS[kind]}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      )}
+
+      {compact ? null : (
+        <Field
+          label="Label"
+          htmlFor={`${idPrefix}-label`}
+          hint="How it appears in the vault and on a subscription."
         >
-          <SelectTrigger id={`${idPrefix}-kind`} className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {groups.map((group) => (
-              <SelectGroup key={group.label}>
-                <SelectLabel>{group.label}</SelectLabel>
-                {group.kinds.map((kind) => (
-                  <SelectItem key={kind} value={kind}>
-                    {CREDENTIAL_LABELS[kind]}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
+          <Input
+            id={`${idPrefix}-label`}
+            autoFocus={autoFocus}
+            autoComplete="off"
+            value={value.label}
+            onChange={(event) => onChange({ ...value, label: event.target.value })}
+            placeholder="Acme Anthropic key"
+          />
+        </Field>
+      )}
+
+      {recipe === undefined ? null : <RecipeBlock recipe={recipe} compact={compact} />}
 
       <Field
-        label="Label"
-        htmlFor={`${idPrefix}-label`}
-        hint="How it appears in the vault and on a subscription."
+        label={compact ? (recipe ? 'Paste your login' : 'API key') : 'Secret'}
+        htmlFor={`${idPrefix}-secret`}
+        hint={compact && recipe ? undefined : CREDENTIAL_HELP[value.kind]}
       >
-        <Input
-          id={`${idPrefix}-label`}
-          autoFocus={autoFocus}
-          autoComplete="off"
-          value={value.label}
-          onChange={(event) => onChange({ ...value, label: event.target.value })}
-          placeholder="Acme Anthropic key"
-        />
-      </Field>
-
-      {recipe === undefined ? null : <RecipeBlock recipe={recipe} />}
-
-      <Field label="Secret" htmlFor={`${idPrefix}-secret`} hint={CREDENTIAL_HELP[value.kind]}>
         <div className="relative">
           <Input
             id={`${idPrefix}-secret`}

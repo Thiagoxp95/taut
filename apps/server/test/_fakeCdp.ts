@@ -25,7 +25,11 @@ export interface FakeCdp {
   /** Sockets (`/json/version` + CDP) accepted so far. */
   connections: number
   /** Push one more frame to the attached page right now. */
-  readonly emitFrame: (data: string) => void
+  readonly emitFrame: (data: string, targetId?: string) => void
+  readonly createPage: (id: string, title: string, url: string) => void
+  readonly updatePage: (id: string, title: string, url: string) => void
+  readonly closePage: (id: string) => void
+  readonly selectPage: (id: string) => void
   /** A `net.Socket` to the fake, for `openTunnel`. */
   readonly tunnel: () => import('node:net').Socket
   readonly close: () => Promise<void>
@@ -45,6 +49,24 @@ export const startFakeCdp = (options: FakeCdpOptions = {}): Promise<FakeCdp> =>
     const emitted: Array<string> = []
     const sockets = new Set<WebSocket>()
     let frameSeq = 0
+    let activeTargetId = TARGET_ID
+    const pages = new Map([
+      [
+        TARGET_ID,
+        {
+          targetId: TARGET_ID,
+          type: 'page',
+          title: 'Example',
+          url: 'https://example.com/',
+          attached: false
+        }
+      ]
+    ])
+    const sessions = new Map<WebSocket, Map<string, string>>()
+    const emitTarget = (method: string, params: Record<string, unknown>) => {
+      for (const ws of sockets)
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ method, params }))
+    }
 
     const server = http.createServer((req, res) => {
       if (req.url === '/json/version') {
@@ -63,10 +85,10 @@ export const startFakeCdp = (options: FakeCdpOptions = {}): Promise<FakeCdp> =>
     })
     const wss = new WebSocketServer({ noServer: true })
 
-    const emitFrame = (data: string): void => {
+    const emitFrame = (data: string, targetId = TARGET_ID): void => {
       frameSeq += 1
       emitted.push(data)
-      const event = JSON.stringify({
+      const event = {
         method: 'Page.screencastFrame',
         sessionId: ATTACHED_SESSION,
         params: {
@@ -82,8 +104,14 @@ export const startFakeCdp = (options: FakeCdpOptions = {}): Promise<FakeCdp> =>
           },
           sessionId: frameSeq
         }
-      })
-      for (const ws of sockets) if (ws.readyState === WebSocket.OPEN) ws.send(event)
+      }
+      for (const ws of sockets) {
+        const sessionId = [...(sessions.get(ws)?.entries() ?? [])].find(
+          ([, id]) => id === targetId
+        )?.[0]
+        if (ws.readyState === WebSocket.OPEN && sessionId)
+          ws.send(JSON.stringify({ ...event, sessionId }))
+      }
     }
 
     const answer = (
@@ -92,22 +120,36 @@ export const startFakeCdp = (options: FakeCdpOptions = {}): Promise<FakeCdp> =>
       call: CdpCall
     ): { result: Record<string, unknown> } | { error: { message: string } } => {
       switch (call.method) {
+        case 'Runtime.evaluate':
+          return {
+            result: {
+              result: {
+                type: 'boolean',
+                value: sessions.get(ws)?.get(call.sessionId ?? '') === activeTargetId
+              }
+            }
+          }
         case 'Target.setDiscoverTargets':
         case 'Page.screencastFrameAck':
-        case 'Target.detachFromTarget':
         case 'Input.dispatchMouseEvent':
         case 'Input.dispatchKeyEvent':
           return { result: {} }
         case 'Target.getTargets':
           return {
             result: {
-              targetInfos: [
-                { targetId: TARGET_ID, type: 'page', url: 'https://example.com/', attached: false }
-              ]
+              targetInfos: [...pages.values()]
             }
           }
-        case 'Target.attachToTarget':
-          return { result: { sessionId: ATTACHED_SESSION } }
+        case 'Target.attachToTarget': {
+          const targetId = String(call.params['targetId'])
+          if (!pages.has(targetId)) return { error: { message: 'No such target' } }
+          const sessionId = targetId === TARGET_ID ? ATTACHED_SESSION : `session-${targetId}`
+          sessions.get(ws)!.set(sessionId, targetId)
+          return { result: { sessionId } }
+        }
+        case 'Target.detachFromTarget':
+          sessions.get(ws)!.delete(String(call.params['sessionId']))
+          return { result: {} }
         case 'Page.startScreencast': {
           setTimeout(() => {
             for (let i = 0; i < (options.burst ?? 0); i++) {
@@ -125,7 +167,11 @@ export const startFakeCdp = (options: FakeCdpOptions = {}): Promise<FakeCdp> =>
 
     wss.on('connection', (ws) => {
       sockets.add(ws)
-      ws.on('close', () => sockets.delete(ws))
+      sessions.set(ws, new Map())
+      ws.on('close', () => {
+        sockets.delete(ws)
+        sessions.delete(ws)
+      })
       ws.on('message', (raw) => {
         const message = JSON.parse(raw.toString()) as {
           id: number
@@ -154,6 +200,38 @@ export const startFakeCdp = (options: FakeCdpOptions = {}): Promise<FakeCdp> =>
         emitted,
         connections: 0,
         emitFrame,
+        selectPage: (id) => {
+          const previous = activeTargetId
+          activeTargetId = id
+          for (const ws of sockets) {
+            for (const [sessionId, targetId] of sessions.get(ws) ?? []) {
+              if (targetId === previous || targetId === id)
+                ws.send(
+                  JSON.stringify({
+                    method: 'Page.screencastVisibilityChanged',
+                    sessionId,
+                    params: { visible: targetId === id }
+                  })
+                )
+            }
+          }
+        },
+        createPage: (id, title, url) => {
+          activeTargetId = id
+          const targetInfo = { targetId: id, type: 'page', title, url, attached: false }
+          pages.set(id, targetInfo)
+          emitTarget('Target.targetCreated', { targetInfo })
+        },
+        updatePage: (id, title, url) => {
+          const targetInfo = { targetId: id, type: 'page', title, url, attached: false }
+          pages.set(id, targetInfo)
+          emitTarget('Target.targetInfoChanged', { targetInfo })
+        },
+        closePage: (id) => {
+          pages.delete(id)
+          if (activeTargetId === id) activeTargetId = [...pages.keys()].at(-1) ?? ''
+          emitTarget('Target.targetDestroyed', { targetId: id })
+        },
         tunnel: () => {
           fake.connections += 1
           return connect(port, '127.0.0.1')

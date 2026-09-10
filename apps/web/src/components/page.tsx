@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { LockIcon } from 'lucide-react'
+import { LockIcon } from '@taut/ui/components/icons'
 import { cn } from '@taut/ui/lib/utils'
 import { SidebarTrigger } from '@taut/ui/components/sidebar'
 
@@ -15,18 +15,20 @@ export function PageHeader({
   actions?: React.ReactNode
 }) {
   return (
-    <header className="taut-topbar flex h-14 shrink-0 items-center gap-3 border-b bg-background px-6">
+    <header className="taut-topbar flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b bg-background px-4 py-2 sm:px-6">
       {/* On phones the sidebar is a sheet, so every page carries its handle. */}
       <SidebarTrigger className="-ml-2 shrink-0 md:hidden" />
-      {icon !== undefined ? <span className="text-muted-foreground">{icon}</span> : null}
-      <div className="min-w-0">
+      {icon !== undefined ? <span className="shrink-0 text-muted-foreground">{icon}</span> : null}
+      <div className="min-w-0 flex-1 basis-36">
         <h1 className="truncate text-[15px] leading-tight font-semibold">{title}</h1>
         {description !== undefined ? (
           <p className="truncate text-xs text-muted-foreground">{description}</p>
         ) : null}
       </div>
       {actions !== undefined ? (
-        <div className="ml-auto flex items-center gap-2">{actions}</div>
+        <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+          {actions}
+        </div>
       ) : null}
     </header>
   )
@@ -35,7 +37,10 @@ export function PageHeader({
 export function PageBody({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      className={cn('taut-scroll min-h-0 flex-1 overflow-y-auto px-6 py-6', className)}
+      className={cn(
+        'taut-scroll @container/page min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-6',
+        className
+      )}
       {...props}
     />
   )
@@ -56,7 +61,7 @@ export function PageSection({
 }) {
   return (
     <section className={cn('mb-8', className)}>
-      <div className="mb-3 flex items-end gap-3">
+      <div className="mb-3 flex flex-wrap items-end gap-3">
         <div>
           <h2 className="text-sm font-semibold">{title}</h2>
           {description !== undefined ? (
@@ -86,7 +91,7 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        'flex flex-col items-center justify-center rounded-lg border border-dashed px-6 py-12 text-center',
+        'flex flex-col items-center justify-center min-w-0 rounded-lg border border-dashed px-4 py-8 sm:px-6 sm:py-12 text-center',
         className
       )}
     >
@@ -95,7 +100,9 @@ export function EmptyState({
       </div>
       <p className="text-sm font-medium">{title}</p>
       <p className="mt-1 max-w-sm text-sm text-muted-foreground">{description}</p>
-      {action !== undefined ? <div className="mt-4">{action}</div> : null}
+      {action !== undefined ? (
+        <div className="mt-4 max-w-full [&>*]:max-w-full [&>*]:whitespace-normal">{action}</div>
+      ) : null}
     </div>
   )
 }
@@ -131,7 +138,7 @@ export function Field({
 }) {
   const Tag = htmlFor === undefined ? 'span' : 'label'
   return (
-    <div className={cn('grid gap-2', className)}>
+    <div className={cn('grid min-w-0 gap-2 [&>*]:min-w-0', className)}>
       <Tag
         htmlFor={htmlFor}
         className="text-sm leading-none font-medium text-foreground select-none"

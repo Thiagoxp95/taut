@@ -27,12 +27,14 @@ export function SettingsShell({
   return (
     <div
       className={cn(
-        'mx-auto flex w-full max-w-5xl flex-col gap-6 md:flex-row md:items-start md:gap-8',
+        'mx-auto flex min-w-0 w-full max-w-5xl flex-col gap-6 @3xl/page:flex-row @3xl/page:items-start @3xl/page:gap-8',
         className
       )}
     >
       {nav === undefined ? null : (
-        <div className="md:sticky md:top-6 md:w-56 md:shrink-0">{nav}</div>
+        <div className="min-w-0 @3xl/page:sticky @3xl/page:top-6 @3xl/page:w-48 @3xl/page:shrink-0">
+          {nav}
+        </div>
       )}
       <div className="min-w-0 flex-1">{children}</div>
     </div>
@@ -40,11 +42,12 @@ export function SettingsShell({
 }
 
 /** The vertical rail. On phones it scrolls sideways instead of stacking ten items tall. */
-export function SettingsNav({ children, className }: React.ComponentProps<'nav'>) {
+export function SettingsNav({ children, className, ...props }: React.ComponentProps<'nav'>) {
   return (
     <nav
+      {...props}
       className={cn(
-        'flex gap-1 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0',
+        'flex min-w-0 max-w-full gap-1 overflow-x-auto p-1 @3xl/page:flex-col @3xl/page:overflow-visible',
         className
       )}
     >
@@ -97,17 +100,30 @@ export function SettingsTabs({
   children: React.ReactNode
   className?: string
 }) {
+  const ref = React.useRef<HTMLDivElement>(null)
+  const [vertical, setVertical] = React.useState(false)
+  React.useEffect(() => {
+    const element = ref.current
+    if (element === null) return
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry !== undefined) setVertical(getComputedStyle(element).flexDirection === 'row')
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
   return (
     <Tabs
+      ref={ref}
       value={value}
       onValueChange={onValueChange}
-      orientation="vertical"
+      orientation={vertical ? 'vertical' : 'horizontal'}
       className={cn(
-        'mx-auto w-full max-w-5xl flex-col gap-6 md:flex-row md:items-start md:gap-8',
+        'mx-auto min-w-0 w-full max-w-5xl flex-col gap-6 @3xl/page:flex-row @3xl/page:items-start @3xl/page:gap-8',
         className
       )}
     >
-      <TabsList className="h-auto w-full gap-1 overflow-x-auto rounded-none bg-transparent p-0 md:sticky md:top-6 md:w-56 md:shrink-0 md:flex-col md:overflow-visible">
+      <TabsList className="h-auto min-w-0 w-full justify-start gap-1 overflow-x-auto rounded-none bg-transparent p-1 @3xl/page:sticky @3xl/page:top-6 @3xl/page:w-48 @3xl/page:shrink-0 @3xl/page:flex-col @3xl/page:overflow-visible">
         {nav}
       </TabsList>
       <div className="min-w-0 flex-1">{children}</div>
@@ -130,7 +146,7 @@ export function SettingsTab({
       data-active={undefined}
       className={cn(
         navItemClass,
-        'h-auto w-auto flex-none justify-start data-[state=active]:bg-accent data-[state=active]:text-foreground data-[state=active]:shadow-none md:w-full dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-accent dark:data-[state=active]:text-foreground',
+        'h-auto w-auto flex-none justify-start data-[state=active]:bg-accent data-[state=active]:text-foreground data-[state=active]:shadow-none @3xl/page:w-full dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-accent dark:data-[state=active]:text-foreground',
         "data-[state=active]:[&_svg:not([class*='text-'])]:text-foreground"
       )}
     >
@@ -142,7 +158,7 @@ export function SettingsTab({
 
 export function SettingsPanel({ value, children }: { value: string; children: React.ReactNode }) {
   return (
-    <TabsContent value={value} className="grid gap-6">
+    <TabsContent value={value} className="grid min-w-0 gap-6">
       {children}
     </TabsContent>
   )
@@ -170,15 +186,15 @@ export function SettingsCallout({
   return (
     <Alert variant={variant} className="mb-6 items-center gap-x-3 px-4 py-3.5">
       {icon}
-      <div className="col-start-2 flex flex-wrap items-center gap-x-4 gap-y-2">
-        <div className="min-w-0 flex-1">
+      <div className="col-start-2 flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="min-w-0 flex-1 basis-48">
           <AlertTitle className="col-start-1">{title}</AlertTitle>
           {description === undefined ? null : (
             <AlertDescription className="col-start-1 mt-0.5">{description}</AlertDescription>
           )}
         </div>
         {onDismiss === undefined && action === undefined ? null : (
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
             {onDismiss === undefined ? null : (
               <Button variant="ghost" size="sm" onClick={onDismiss}>
                 Dismiss
@@ -218,8 +234,8 @@ export function SettingsCard({
   const body = (
     <>
       {title === undefined ? null : (
-        <header className="flex items-start gap-4 border-b px-6 py-5">
-          <div className="min-w-0 flex-1">
+        <header className="flex flex-wrap items-start gap-4 border-b px-4 py-5 sm:px-6">
+          <div className="min-w-0 flex-1 basis-40">
             <h2 className="text-base leading-tight font-semibold">{title}</h2>
             {description === undefined ? null : (
               <p className="mt-1 text-sm text-muted-foreground">{description}</p>
@@ -230,7 +246,9 @@ export function SettingsCard({
       )}
       <div className="divide-y">{children}</div>
       {footer === undefined ? null : (
-        <footer className="flex items-center justify-end gap-2 border-t px-6 py-4">{footer}</footer>
+        <footer className="flex flex-wrap items-center justify-end gap-2 border-t px-4 py-4 sm:px-6">
+          {footer}
+        </footer>
       )}
     </>
   )
@@ -238,7 +256,7 @@ export function SettingsCard({
   return (
     <section
       className={cn(
-        'overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm',
+        '@container/settings-card min-w-0 overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm',
         className
       )}
     >
@@ -274,7 +292,7 @@ export function SettingsSection({
       footer={footer}
       className={className}
     >
-      <div className="grid min-w-0 gap-4 px-6 py-5 [&>*]:min-w-0">{children}</div>
+      <div className="grid min-w-0 gap-4 px-4 py-5 sm:px-6 [&>*]:min-w-0">{children}</div>
     </SettingsCard>
   )
 }
@@ -305,15 +323,17 @@ export function SettingsRow({
   return (
     <div
       className={cn(
-        'grid gap-3 px-6 py-5',
-        stacked ? null : 'sm:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] sm:items-start sm:gap-8',
+        'grid min-w-0 gap-3 px-4 py-5 sm:px-6',
+        stacked
+          ? null
+          : '@2xl/settings-card:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] @2xl/settings-card:items-start @2xl/settings-card:gap-8',
         className
       )}
     >
       <div className="min-w-0">
         <Tag
           htmlFor={htmlFor}
-          className="flex items-center gap-2 text-sm leading-none font-medium text-foreground select-none"
+          className="flex flex-wrap items-center gap-2 text-sm leading-snug font-medium text-foreground select-none"
         >
           {label}
           {badge}
@@ -324,7 +344,7 @@ export function SettingsRow({
       </div>
       <div
         className={cn(
-          'grid min-w-0 gap-4 [&>*]:min-w-0',
+          'grid min-w-0 gap-4 [&>*]:min-w-0 [&>*]:max-w-full',
           // Inputs and selects fill the column; a lone button sizes to its label.
           stacked ? null : 'sm:justify-items-stretch [&>button]:w-fit [&>button]:justify-self-start'
         )}
@@ -351,7 +371,7 @@ export function SettingsField({
 }) {
   const Tag = htmlFor === undefined ? 'span' : 'label'
   return (
-    <div className={cn('grid gap-2', className)}>
+    <div className={cn('grid min-w-0 gap-2 [&>*]:min-w-0', className)}>
       <Tag htmlFor={htmlFor} className="text-sm leading-none font-medium select-none">
         {label}
       </Tag>
@@ -427,8 +447,8 @@ export const affixInputClass =
 /** A row of destructive actions, kept in its own card at the bottom of a page. */
 export function DangerZone({ children }: { children: React.ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-destructive/30 bg-card text-card-foreground shadow-sm">
-      <header className="border-b border-destructive/30 px-6 py-5">
+    <section className="@container/settings-card min-w-0 overflow-hidden rounded-xl border border-destructive/30 bg-card text-card-foreground shadow-sm">
+      <header className="border-b border-destructive/30 px-4 py-5 sm:px-6">
         <h2 className="text-base leading-tight font-semibold text-destructive">Danger zone</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           These actions cannot be undone from here.

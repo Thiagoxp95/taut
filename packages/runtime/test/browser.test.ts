@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   BROWSER_CDP_PORT,
@@ -14,6 +14,21 @@ import {
 } from '../src/browser.js'
 
 describe('browserMcpSpec', () => {
+  it('supports Chromium inside an explicitly configured shared runtime container', () => {
+    vi.stubEnv('TAUT_BROWSER_NO_SANDBOX', 'true')
+    try {
+      const spec = browserMcpSpec({ provider: 'local', homeDir: '/data/company/agent' })
+      expect(spec.args).toContain('--no-sandbox')
+      const attached = browserMcpSpec({
+        provider: 'local',
+        homeDir: '/data/company/agent',
+        cdpEndpoint: 'http://127.0.0.1:9333'
+      })
+      expect(attached.args).not.toContain('--no-sandbox')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
   it('docker: global playwright-mcp bin, headless chromium, no sandbox, dirs under the home', () => {
     expect(browserMcpSpec({ provider: 'docker', homeDir: '/home/agent' })).toEqual({
       command: 'playwright-mcp',

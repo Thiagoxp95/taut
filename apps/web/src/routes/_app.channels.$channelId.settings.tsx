@@ -7,7 +7,7 @@ import {
   SlidersHorizontalIcon,
   TrashIcon,
   UsersIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import { Badge } from '@taut/ui/components/badge'
 import { Button } from '@taut/ui/components/button'
 import { Input } from '@taut/ui/components/input'
@@ -242,6 +242,7 @@ function ChannelSettingsRoute() {
                   return (
                     <div key={member.memberId} className="flex items-center gap-3 px-6 py-3">
                       <EntityAvatar
+                        memberId={member.memberId}
                         avatar={entry?.avatar ?? { kind: 'emoji', value: '👤' }}
                         kind={member.memberKind}
                         face={entry?.face}

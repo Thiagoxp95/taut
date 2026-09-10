@@ -4,6 +4,7 @@
  * injected credential, so the real claude-code adapter, parser and redactor are exercised.
  *
  *   prompt contains "hang"        → init line, then never ends (until interrupted)
+ *   prompt contains "narrate"     → thinking block, tool_use(Bash), "done", 500 ms apart
  *   prompt contains "two parts"   → "pi" … "ng" as two assistant turns, 150 ms apart
  *   prompt contains "wait for release" → init line, then blocks until `release(text)`; the
  *                                   text is then printed as one assistant turn + result
@@ -27,6 +28,8 @@ import type { Duplex } from 'node:stream'
 
 /** Knobs for the workspace tests (docs/build-plan-workspace.md); the scheduler tests use none. */
 export interface FakeRuntimeOptions {
+  /** Park every model turn so a conversation test can drive each participant separately. */
+  readonly waitForRelease?: boolean
   /** Reported as `provider.name` / `machine.provider`. Default `local`. */
   readonly provider?: 'local' | 'docker'
   /** Every machine's `openPty`. Default: refuse with `MachineUnavailable`, as `local` does (D2). */
@@ -98,6 +101,16 @@ const init = (sessionId: string): ExecOutput =>
 const assistant = (text: string): ExecOutput =>
   line({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
 
+/** A reasoning block and a tool call: what the running commentary is made of (activity D4). */
+const thinking = (text: string): ExecOutput =>
+  line({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: text }] } })
+
+const toolUse = (name: string, input: unknown): ExecOutput =>
+  line({
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', id: 'toolu_fake', name, input }] }
+  })
+
 const result = (sessionId: string, text: string, ok: boolean, subtype = 'success'): ExecOutput =>
   line({
     type: 'result',
@@ -128,12 +141,9 @@ export const makeFakeRuntime = (options: FakeRuntimeOptions = {}): FakeRuntime =
 
   const script = (exec: FakeExec): Stream.Stream<ExecOutput> => {
     const sessionId = `sess_${++sessionCounter}`
-    // The prompt is `[context ---] trigger --- footer`; only the trigger line picks the script,
-    // otherwise an earlier "hang" in the context would replay forever. With no context (the
-    // first message of a DM) the trigger is the first part.
+    // Only the addressed trigger line picks the script, never an old context message.
     const full = exec.stdin ?? ''
-    const parts = full.split('\n---\n')
-    const prompt = (parts.length >= 3 ? parts[1] : parts[0]) ?? full
+    const prompt = full.split('\n').find((line) => /^\[(?:#|dm\])/.test(line)) ?? full
     const key = exec.env['ANTHROPIC_API_KEY'] ?? ''
     if (key.includes('ratelimit')) {
       return Stream.make(
@@ -150,7 +160,7 @@ export const makeFakeRuntime = (options: FakeRuntimeOptions = {}): FakeRuntime =
     if (prompt.includes('hang')) {
       return Stream.concat(Stream.make(init(sessionId)), Stream.never)
     }
-    if (prompt.includes('wait for release')) {
+    if (options.waitForRelease || prompt.includes('wait for release')) {
       const gate = Effect.runSync(Deferred.make<string>())
       waiting.push(gate)
       return Stream.concat(
@@ -160,6 +170,36 @@ export const makeFakeRuntime = (options: FakeRuntimeOptions = {}): FakeRuntime =
             Stream.make(assistant(text), result(sessionId, text, true), exit)
           )
         )
+      )
+    }
+    // Reasoning, a tool, an answer draft, a public summary, then the reply — spaced past the activity
+    // throttle so each one gets its own broadcast (docs/build-plan-activity.md D3).
+    if (prompt.includes('narrate')) {
+      return Stream.make(
+        init(sessionId),
+        thinking('Checking the schema first.\nReading the failing test.'),
+        toolUse('Bash', { command: 'pnpm test' }),
+        assistant('I will map how the machines are provisioned.'),
+        assistant('<taut-status>Writing a design note</taut-status>')
+      ).pipe(
+        Stream.schedule(Schedule.spaced('500 millis')),
+        // The browser transition must survive a throttled, identical status in the same tick.
+        Stream.concat(
+          Stream.make(
+            assistant('<taut-status>Driving the browser</taut-status>'),
+            toolUse('mcp__browser__browser_snapshot', {}),
+            thinking('Private reasoning about the page.')
+          )
+        ),
+        Stream.concat(
+          Stream.make(
+            assistant('<taut-status>Reading the page</taut-status>'),
+            toolUse('Bash', { command: 'pnpm lint' }),
+            assistant('done'),
+            result(sessionId, 'done', true)
+          ).pipe(Stream.schedule(Schedule.spaced('500 millis')))
+        ),
+        Stream.concat(Stream.make(exit))
       )
     }
     if (prompt.includes('two parts')) {

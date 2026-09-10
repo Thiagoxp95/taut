@@ -29,6 +29,8 @@ const info = ((): ShellInfo => {
 const taut: TautBridge = {
   platform: info.platform,
   version: info.version,
+  connectClaude: () => ipcRenderer.invoke('taut:claude:connect'),
+  cancelClaudeConnect: () => ipcRenderer.send('taut:claude:cancel'),
   setBadge: (count: number) => ipcRenderer.send('taut:badge', count),
   notify: (notification: DesktopNotification) => ipcRenderer.send('taut:notify', notification),
   allowMediaOrigin: (url: string) => ipcRenderer.send('taut:media-origin', url),

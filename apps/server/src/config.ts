@@ -52,6 +52,21 @@ const machineProviderConfig = Config.literal(
   'docker'
 )('TAUT_MACHINE_PROVIDER').pipe(Config.withDefault('local' as const))
 
+const instanceIdConfig = Config.option(
+  Config.string('TAUT_INSTANCE_ID').pipe(
+    Config.mapOrFail((value) =>
+      value.length <= 63 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)
+        ? Either.right(value)
+        : Either.left(
+            ConfigError.InvalidData(
+              ['TAUT_INSTANCE_ID'],
+              'must be 1–63 lowercase letters or digits, with single hyphens between segments'
+            )
+          )
+    )
+  )
+)
+
 const maxConcurrentConfig = Config.integer('TAUT_MAX_CONCURRENT_TASKS').pipe(
   Config.withDefault(4),
   Config.mapOrFail((n) =>
@@ -127,8 +142,14 @@ const rawConfig = Config.all({
   // ── Phase 4: agent execution ────────────────────────────────────────────────
   /** `local` spawns runtimes on this host (dev); `docker` gives every agent a container. */
   machineProvider: machineProviderConfig,
-  /** The server as seen from an agent's machine (`TAUT_URL` for the `taut` MCP server). */
+  /** Stable installation identity, isolating Docker resources on a shared daemon. */
+  instanceId: instanceIdConfig,
+  /** Existing, installation-owned network exposing the API to agent containers. */
+  dockerNetwork: Config.option(Config.string('TAUT_DOCKER_NETWORK')),
+  /** Public browser origin, used by integration redirects and external callbacks. */
   publicUrl: Config.option(Config.string('TAUT_PUBLIC_URL')),
+  /** Internal API origin reachable from agent machines; defaults to publicUrl. */
+  agentApiUrl: Config.option(Config.string('TAUT_AGENT_API_URL')),
   maxConcurrentTasks: maxConcurrentConfig,
   maxThreadsPerAgent: maxThreadsPerAgentConfig,
   /** Stream a small "using tool X" line into the reply for every tool call. */
@@ -303,7 +324,10 @@ export class AppConfig extends Effect.Service<AppConfig>()('AppConfig', {
       cookieSecure: Option.getOrElse(raw.cookieSecure, () => production),
       webDist: path.resolve(raw.webDist),
       machineProvider: raw.machineProvider,
+      instanceId: Option.getOrUndefined(raw.instanceId),
+      dockerNetwork: Option.getOrUndefined(raw.dockerNetwork),
       publicUrl: Option.getOrUndefined(raw.publicUrl),
+      agentApiUrl: Option.getOrUndefined(raw.agentApiUrl),
       maxConcurrentTasks: raw.maxConcurrentTasks,
       maxThreadsPerAgent: raw.maxThreadsPerAgent,
       showTools: raw.showTools,

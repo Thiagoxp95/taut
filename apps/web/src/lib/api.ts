@@ -1,3 +1,4 @@
+import type { ComponentAnswer } from '@taut/contract'
 /**
  * Every call the web makes to the server, as a typed hook.
  *
@@ -14,6 +15,8 @@ import {
 } from '@tanstack/react-query'
 import type {
   Agent,
+  ConnectorInput,
+  UpdateConnectorInput,
   AgentDetail,
   AgentId,
   AgentSkill,
@@ -24,6 +27,8 @@ import type {
   Call,
   CallId,
   CallsConfig,
+  Canvas,
+  CanvasDocument,
   Channel,
   ChannelId,
   ChannelMember,
@@ -43,6 +48,9 @@ import type {
   Invite,
   InviteId,
   InvitePreview,
+  CreateIssuePayload,
+  IssueActivity,
+  IssueOptions,
   Me,
   MemberId,
   MemberKind,
@@ -71,14 +79,19 @@ import type {
   TaskId,
   TaskStatus,
   Trigger,
+  UpdateIssuePayload,
   UserId,
   VaultItemId,
   VaultItemMeta
 } from '@taut/contract'
-import { MessageId } from '@taut/contract'
+// `IssueDetail` is a value here, not just a type: an optimistic write has to
+// rebuild the cached instance (docs/build-plan-issues.md D3), and a Schema.Class
+// is only a class if you import the class.
+import { IssueDetail, MessageId } from '@taut/contract'
 import { Effect, Redacted } from 'effect'
 
 import { call, type Api, type ApiError } from '@/lib/api-client'
+import type { DmInboxItem } from '@taut/contract/api'
 import { live } from '@/lib/live'
 import { addMessage, removeMessage, updateMessage, type MessagePages } from '@/lib/message-cache'
 import { qk, type PageOf } from '@/lib/query-keys'
@@ -103,6 +116,29 @@ const emptyPage = <A>(): Effect.Effect<PageOf<A>, never, Api> =>
 /** Page cursors travel as plain strings; the contract wants a branded id. */
 const asMessageId = (cursor: Cursor): MessageId | undefined =>
   cursor === undefined ? undefined : MessageId.make(cursor)
+
+export function useChannelCanvases(
+  channelId: ChannelId
+): UseQueryResult<readonly Canvas[], ApiError> {
+  return useEffectQuery<readonly Canvas[]>(
+    qk.canvases(channelId),
+    call((api) => api.channels.canvases({ path: { channelId } })),
+    { meta: { silent: true } }
+  )
+}
+
+export function useCanvasDocument(
+  channelId: ChannelId,
+  canvas: Canvas | undefined
+): UseQueryResult<CanvasDocument, ApiError> {
+  return useEffectQuery<CanvasDocument>(
+    [...qk.canvas(channelId, canvas?.id ?? 'none'), canvas?.revision ?? 0],
+    canvas === undefined
+      ? Effect.dieMessage('No canvas selected')
+      : call((api) => api.channels.canvas({ path: { channelId, canvasId: canvas.id } })),
+    { enabled: canvas !== undefined, meta: { silent: true } }
+  )
+}
 
 // --- session --------------------------------------------------------------
 
@@ -402,6 +438,13 @@ export function useSetDepartmentHead() {
 
 // --- channels -------------------------------------------------------------
 
+export function useDmInbox() {
+  return useEffectQuery<PageOf<DmInboxItem>>(
+    qk.dmInbox,
+    call((api) => api.channels.inbox())
+  )
+}
+
 export function useChannels(): UseQueryResult<PageOf<Channel>, ApiError> {
   return useEffectQuery<PageOf<Channel>>(
     qk.channels,
@@ -509,13 +552,20 @@ export function useOpenDm() {
 }
 
 export function useMarkRead() {
-  return useEffectMutation((input: { channelId: ChannelId; lastReadSeq: number }) =>
-    call((api) =>
-      api.channels.markRead({
-        path: { channelId: input.channelId },
-        payload: { lastReadSeq: input.lastReadSeq }
-      })
-    )
+  const queryClient = useQueryClient()
+  return useEffectMutation(
+    (input: { channelId: ChannelId; lastReadSeq: number }) =>
+      call((api) =>
+        api.channels.markRead({
+          path: { channelId: input.channelId },
+          payload: { lastReadSeq: input.lastReadSeq }
+        })
+      ),
+    {
+      onSuccess: () => {
+        void queryClient.invalidateQueries({ queryKey: qk.dmInbox })
+      }
+    }
   )
 }
 
@@ -618,6 +668,26 @@ export function attachmentUrl(
   return options?.download === true ? `${path}?download=true` : path
 }
 
+/** Documents are immutable attachments; live revisions use `useCanvasDocument`. */
+export function useAttachmentText(
+  attachmentId: AttachmentId | undefined
+): UseQueryResult<string, ApiError> {
+  return useEffectQuery(
+    qk.attachmentText(attachmentId ?? 'none'),
+    attachmentId === undefined
+      ? Effect.dieMessage('No document selected')
+      : call((api) => api.attachments.content({ path: { attachmentId }, urlParams: {} })).pipe(
+          Effect.map((bytes) => new TextDecoder().decode(bytes))
+        ),
+    {
+      enabled: attachmentId !== undefined,
+      staleTime: Infinity,
+      retry: false,
+      meta: { silent: true }
+    }
+  )
+}
+
 /**
  * One file, one request (D2). The result is an orphan until a `messages.create`
  * carries its id, so the composer can show it while the message is still a draft.
@@ -700,6 +770,7 @@ export function useCreateAgent() {
       permissionMode: Agent['permissionMode']
       /** A headless browser inside the agent's machine. Off unless asked for. */
       browserAccess?: boolean
+      connectors?: readonly ConnectorInput[]
       /** Joins this department (and its channels) on creation. */
       departmentId?: DepartmentId
       /** Repositories it may use from its first task. Each must already be attached. */
@@ -738,6 +809,37 @@ export function useDeleteAgent() {
   const invalidate = useAgentInvalidation()
   return useEffectMutation(
     (agentId: AgentId) => call((api) => api.agents.delete({ path: { agentId } })),
+    { onSuccess: invalidate }
+  )
+}
+
+export function useAddConnector() {
+  const invalidate = useAgentInvalidation()
+  return useEffectMutation(
+    ({ agentId, ...payload }: ConnectorInput & { agentId: AgentId }) =>
+      call((api) => api.agents.addConnector({ path: { agentId }, payload })),
+    { onSuccess: invalidate }
+  )
+}
+
+export function useUpdateConnector() {
+  const invalidate = useAgentInvalidation()
+  return useEffectMutation(
+    ({
+      agentId,
+      connectorId,
+      ...payload
+    }: UpdateConnectorInput & { agentId: AgentId; connectorId: string }) =>
+      call((api) => api.agents.updateConnector({ path: { agentId, connectorId }, payload })),
+    { onSuccess: invalidate }
+  )
+}
+
+export function useRemoveConnector() {
+  const invalidate = useAgentInvalidation()
+  return useEffectMutation(
+    (path: { agentId: AgentId; connectorId: string }) =>
+      call((api) => api.agents.removeConnector({ path })),
     { onSuccess: invalidate }
   )
 }
@@ -1413,6 +1515,217 @@ export function useSyncProjects() {
   return useEffectMutation(() => call((api) => api.projects.sync()), { onSuccess: invalidate })
 }
 
+// --- issues (docs/build-plan-issues.md) -------------------------------------
+
+/**
+ * One ticket, its project and its sub-issues, in one read (D15).
+ *
+ * `ref` is a plain string rather than a `ProjectIssueId` because the route takes
+ * either — a `pis_…` id or the Linear identifier a human quotes in chat — and the
+ * server resolves it. Everything else in this file that reads a mirrored row
+ * takes a branded id; this one cannot, because the whole point of D15 is that a
+ * link to `ENG-4636` works without the reader knowing which project it is under.
+ */
+export function useIssue(ref: string | undefined): UseQueryResult<IssueDetail, ApiError> {
+  return useEffectQuery<IssueDetail>(
+    qk.issue(ref ?? 'none'),
+    ref === undefined
+      ? Effect.dieMessage('No issue')
+      : call((api) => api.projects.issue({ path: { issueId: ref } })),
+    { enabled: ref !== undefined }
+  )
+}
+
+/**
+ * Linear's own history for the ticket, plus the comments Taut refuses to author
+ * (D11, D13). Read live from Linear on every call and never stored.
+ *
+ * `staleTime: 0` on purpose, against the app's 30-second default: history is
+ * derived state only Linear can author, and a stale copy of it is worse than a
+ * spinner. Opening the page is also what reconciles its comments (D12), so a
+ * cached answer would mean a ticket whose Linear conversation never arrives.
+ */
+export function useIssueActivity(ref: string | undefined): UseQueryResult<IssueActivity, ApiError> {
+  return useEffectQuery<IssueActivity>(
+    qk.issueActivity(ref ?? 'none'),
+    ref === undefined
+      ? Effect.dieMessage('No issue')
+      : call((api) => api.projects.issueActivity({ path: { issueId: ref } })),
+    { enabled: ref !== undefined, staleTime: 0 }
+  )
+}
+
+/**
+ * The pick-lists every editor on the issue page needs — states, labels, members,
+ * milestones, sibling projects — read live from Linear (D14).
+ *
+ * Cached for the whole session (`staleTime: Infinity`) because that is what D14
+ * asks for: these are pick-lists, not content. A workflow state added while the
+ * tab is open is one round trip away on the next reload, and the alternative —
+ * a mirrored copy — goes stale silently and files tickets into states that no
+ * longer exist.
+ */
+export function useIssueOptions(
+  projectId: ProjectId | undefined
+): UseQueryResult<IssueOptions, ApiError> {
+  return useEffectQuery<IssueOptions>(
+    qk.issueOptions(projectId ?? 'none'),
+    projectId === undefined
+      ? Effect.dieMessage('No project')
+      : call((api) => api.projects.issueOptions({ path: { projectId } })),
+    { enabled: projectId !== undefined, staleTime: Number.POSITIVE_INFINITY }
+  )
+}
+
+/**
+ * One edit to a ticket: what Linear is told, and what the page should show while
+ * it is being told (docs/build-plan-issues.md D2, D3).
+ *
+ * The two halves are separate because they speak different languages. `patch` is
+ * Linear's — a `stateId`, a `labelIds` set, an `assigneeId` — and is the only
+ * thing that leaves the browser. `optimistic` is the same change expressed in the
+ * fields the page draws, and only the picker that made the change knows both: it
+ * has the option object in its hand, and the mirror row does not carry a
+ * state-id-to-state-name table for the client to look one up in.
+ */
+export interface IssueEdit {
+  readonly patch: typeof UpdateIssuePayload.Type
+  /**
+   * Applied to the cached row for as long as the mutation is in flight. Omit it
+   * for an edit with nothing to show (an estimate on a page that draws none) and
+   * the row simply waits for Linear's answer.
+   */
+  readonly optimistic?: (issue: ProjectIssue) => ProjectIssue
+}
+
+/** What `onMutate` hands `onError` so a refused edit can be put back. */
+interface IssueRollback {
+  readonly previous: IssueDetail | undefined
+}
+
+/**
+ * Member+. Changes one or more fields of a ticket (D2, D4).
+ *
+ * Optimistic with rollback, which is D3 and is not a nicety: Linear's own pickers
+ * are instant, and a picker that spins for 400ms per click does not read as the
+ * same product. So the chip shows the new value the moment it is clicked, the
+ * mutation goes to Linear, and one of two things happens — Linear confirms and
+ * the row is rewritten from *Linear's* answer rather than from the guess (D2), or
+ * Linear refuses and `onError` puts back the exact snapshot taken before the
+ * click. The refusal reaches the reader as Linear's own words through the
+ * `MutationCache` funnel in `main.tsx`, which is where every `Validation` in the
+ * app already surfaces; toasting it a second time here would double it.
+ *
+ * `cancelQueries` first, or an in-flight background refetch of the ticket lands
+ * after the optimistic write and silently undoes it.
+ */
+export function useUpdateIssue(ref: string) {
+  const queryClient = useQueryClient()
+  const key = qk.issue(ref)
+
+  return useEffectMutation<ProjectIssue, IssueEdit, IssueRollback>(
+    (edit) =>
+      call((api) => api.projects.updateIssue({ path: { issueId: ref }, payload: edit.patch })),
+    {
+      onMutate: async (edit) => {
+        await queryClient.cancelQueries({ queryKey: key })
+        const previous = queryClient.getQueryData<IssueDetail>(key)
+        if (previous !== undefined && edit.optimistic !== undefined) {
+          queryClient.setQueryData<IssueDetail>(
+            key,
+            new IssueDetail({ ...previous, issue: edit.optimistic(previous.issue) }, true)
+          )
+        }
+        return { previous }
+      },
+      onError: (_error, _edit, context) => {
+        if (context?.previous !== undefined) queryClient.setQueryData(key, context.previous)
+      },
+      onSuccess: (issue) => {
+        queryClient.setQueryData<IssueDetail>(key, (current) =>
+          current === undefined ? current : new IssueDetail({ ...current, issue }, true)
+        )
+      },
+      // The Issues tab, the sidebar counts and the ticket's own row all moved.
+      onSettled: () => {
+        void queryClient.invalidateQueries({ queryKey: qk.projects })
+      }
+    }
+  )
+}
+
+/**
+ * Member+. Files a new ticket under a project (D1, D2). The row that comes back
+ * is Linear's answer, never the dialog's hope, so the list redraws from the
+ * truth — which is also why this invalidates rather than inserting by hand: the
+ * new ticket has to land in its workflow state's group, in Linear's own order.
+ */
+export function useCreateIssue() {
+  const invalidate = useProjectInvalidation()
+  return useEffectMutation(
+    (input: { readonly projectId: ProjectId; readonly payload: typeof CreateIssuePayload.Type }) =>
+      call((api) =>
+        api.projects.createIssue({
+          path: { projectId: input.projectId },
+          payload: input.payload
+        })
+      ),
+    { onSuccess: invalidate }
+  )
+}
+
+/**
+ * Admin+. Trashes the ticket in Linear and drops the mirror row (D4, D5).
+ *
+ * No optimistic anything: this is the one write on the page Taut cannot undo, so
+ * the row stays on screen until Linear has actually taken it. The caller then
+ * navigates away, because the page it is on no longer describes something that
+ * exists — the thread does survive (D5), it just has no ticket to hang off.
+ */
+export function useDeleteIssue() {
+  const invalidate = useProjectInvalidation()
+  return useEffectMutation(
+    (ref: string) => call((api) => api.projects.deleteIssue({ path: { issueId: ref } })),
+    { onSuccess: invalidate }
+  )
+}
+
+/**
+ * Member+. Posts the first message of a ticket's thread (D8, D10).
+ *
+ * Idempotent at the server, and the page leans on that: a ticket that already has
+ * a thread gets a reply instead of a second thread, which is what makes this the
+ * safe path to post through whenever the browser has not worked out which hidden
+ * channel the conversation lives in (D9).
+ *
+ * The invalidations are wide because a thread appearing is a wide event. The
+ * channel list, because the project's hidden channel may have just been created
+ * and the poster joined to it on demand (D21) — and that channel is how the page
+ * finds the root message at all. The message caches, because the root landed in a
+ * channel whose id this hook does not know. Both are cheap: this fires once per
+ * ticket, ever.
+ */
+export function useOpenIssueThread(ref: string) {
+  const queryClient = useQueryClient()
+  return useEffectMutation(
+    (body: string) =>
+      call((api) => api.projects.openIssueThread({ path: { issueId: ref }, payload: { body } })),
+    {
+      onSuccess: (issue) => {
+        queryClient.setQueryData<IssueDetail>(qk.issue(ref), (current) =>
+          current === undefined ? current : new IssueDetail({ ...current, issue }, true)
+        )
+        if (issue.threadId !== undefined) {
+          void queryClient.invalidateQueries({ queryKey: qk.thread(issue.threadId) })
+        }
+        void queryClient.invalidateQueries({ queryKey: qk.channels })
+        void queryClient.invalidateQueries({ queryKey: qk.allMessages })
+        void queryClient.invalidateQueries({ queryKey: qk.projects })
+      }
+    }
+  )
+}
+
 // --- tasks ----------------------------------------------------------------
 
 export interface TaskFilters {
@@ -1476,6 +1789,9 @@ export function useLiveRunSeed(): void {
     live.seedRuns(
       items.map((task) => ({
         taskId: task.id,
+        threadId: task.threadId,
+        messageId: task.messageId,
+        agentId: task.agentId,
         ...(task.triggerMessageId === undefined ? {} : { triggerMessageId: task.triggerMessageId })
       })),
       since.current
@@ -1718,3 +2034,45 @@ export function useLeaveCall() {
 }
 
 export type { MessagePages }
+
+export function useAuthorizationAccess(messageId: MessageId, enabled: boolean) {
+  return useEffectQuery(
+    qk.authorization(messageId),
+    call((api) => api.messages.authorization({ path: { messageId } })),
+    { enabled, staleTime: 0 }
+  )
+}
+
+export function useDecideAuthorization() {
+  const queryClient = useQueryClient()
+  return useEffectMutation(
+    (input: { messageId: MessageId; decision: 'approve' | 'decline' }) =>
+      call((api) =>
+        api.messages.decideAuthorization({
+          path: { messageId: input.messageId },
+          payload: { decision: input.decision }
+        })
+      ),
+    {
+      onSuccess: (message) => {
+        updateMessage(queryClient, message)
+        void queryClient.invalidateQueries({ queryKey: qk.authorization(message.id) })
+        void queryClient.invalidateQueries({ queryKey: qk.agents })
+      }
+    }
+  )
+}
+
+export function useAnswerComponent() {
+  const queryClient = useQueryClient()
+  return useEffectMutation(
+    (input: { messageId: MessageId; answers: readonly ComponentAnswer[] }) =>
+      call((api) =>
+        api.messages.answerComponent({
+          path: { messageId: input.messageId },
+          payload: { answers: input.answers }
+        })
+      ),
+    { onSuccess: (message) => updateMessage(queryClient, message) }
+  )
+}

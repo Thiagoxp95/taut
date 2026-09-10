@@ -3,43 +3,26 @@ productName: Taut
 directories:
   buildResources: build
 files:
-  - '!**/.vscode/*'
-  - '!src/*'
-  - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,components.json,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - out/**/*
+  - resources/**/*
+  - package.json
+  - '!**/.env*'
 asarUnpack:
   - resources/**
-win:
-  executableName: Taut
-nsis:
-  artifactName: ${name}-${version}-setup.${ext}
-  shortcutName: ${productName}
-  uninstallDisplayName: ${productName}
-  createDesktopShortcut: always
 mac:
-  category: public.app-category.business
-  entitlementsInherit: build/entitlements.mac.plist
-  # Unsigned local builds: signing and notarisation are a release-time concern.
-  identity: null
-  extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  notarize: false
-dmg:
-  artifactName: ${name}-${version}.${ext}
-linux:
   target:
-    - AppImage
-    - snap
-    - deb
-  maintainer: taut
-  category: Network
-appImage:
-  artifactName: ${name}-${version}.${ext}
+    - dmg
+    - zip
+  category: public.app-category.business
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSCameraUsageDescription: Taut uses your camera during calls.
+    NSMicrophoneUsageDescription: Taut uses your microphone during calls.
+  artifactName: Taut-${version}-mac-${arch}.${ext}
+dmg:
+  artifactName: Taut-${version}-mac-${arch}.${ext}
 npmRebuild: false
 protocols:
   - name: Taut

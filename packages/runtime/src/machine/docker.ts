@@ -88,12 +88,20 @@ const AGENT_USER = `${AGENT_UID}:${AGENT_GID}`
 const LABEL_COMPANY = 'taut.company'
 const LABEL_AGENT = 'taut.agent'
 const LABEL_SPEC = 'taut.spec'
+const LABEL_INSTANCE = 'taut.instance'
 
-export const containerName = (spec: Pick<MachineSpec, 'companySlug' | 'handle'>): string =>
-  `taut-${spec.companySlug}-${spec.handle}`
-export const networkName = (companySlug: string): string => `taut-${companySlug}`
+export const containerName = (
+  spec: Pick<MachineSpec, 'companySlug' | 'handle'>,
+  namespace?: string
+): string => `${networkName(spec.companySlug, namespace)}-${spec.handle}`
+export const networkName = (companySlug: string, namespace?: string): string =>
+  namespace === undefined ? `taut-${companySlug}` : `taut-${namespace}--${companySlug}`
 
 export interface DockerProviderOptions {
+  /** Stable installation slug. Unset preserves legacy development resource names. */
+  readonly namespace?: string
+  /** Existing installation-owned network that exposes the API to agent containers. */
+  readonly apiNetwork?: string
   /** An existing client, or options for `new Dockerode(...)`. Defaults to the local socket. */
   readonly docker?: Dockerode | Dockerode.DockerOptions
   /** Default image when the spec has none. */
@@ -134,6 +142,12 @@ export const makeDockerProvider = (options: DockerProviderOptions = {}): Machine
   const defaultImage = options.image ?? DEFAULT_IMAGE
   const pullMissing = options.pullMissingImage ?? true
   const readOnly = options.readOnlyRootfs ?? true
+  const namespace = options.namespace
+  const instanceLabels: Record<string, string> =
+    namespace === undefined ? {} : { [LABEL_INSTANCE]: namespace }
+  const instanceFilter = namespace === undefined ? [] : [`${LABEL_INSTANCE}=${namespace}`]
+  const owns = (labels: Record<string, string> | undefined) =>
+    labels?.[LABEL_INSTANCE] === namespace
 
   const unavailable = (agentId: string, reason: string, cause?: unknown) =>
     new MachineUnavailable({ provider: 'docker', agentId, reason, cause })
@@ -148,18 +162,29 @@ export const makeDockerProvider = (options: DockerProviderOptions = {}): Machine
 
   const ensureNetwork = (spec: MachineSpec) =>
     tryDocker(spec.agentId, 'network', async () => {
-      const name = networkName(spec.companySlug)
-      const found = await docker.listNetworks({ filters: JSON.stringify({ name: [name] }) })
-      if (found.some((n) => n.Name === name)) return name
+      const name = networkName(spec.companySlug, namespace)
+      if (options.apiNetwork !== undefined) {
+        const api = await docker.getNetwork(options.apiNetwork).inspect()
+        if (!owns(api.Labels)) throw new Error('API network belongs to a different installation')
+      }
+      const findOwned = async () => {
+        const found = await docker.listNetworks({ filters: JSON.stringify({ name: [name] }) })
+        const network = found.find((candidate) => candidate.Name === name)
+        if (network !== undefined && !owns(network.Labels)) {
+          throw new Error('company network belongs to a different installation')
+        }
+        return network !== undefined
+      }
+      if (await findOwned()) return name
       try {
         await docker.createNetwork({
           Name: name,
           Driver: 'bridge',
           CheckDuplicate: true,
-          Labels: { [LABEL_COMPANY]: spec.companySlug }
+          Labels: { [LABEL_COMPANY]: spec.companySlug, ...instanceLabels }
         })
       } catch (cause) {
-        if (statusCode(cause) !== 409) throw cause // created concurrently
+        if (statusCode(cause) !== 409 || !(await findOwned())) throw cause
       }
       return name
     })
@@ -181,17 +206,21 @@ export const makeDockerProvider = (options: DockerProviderOptions = {}): Machine
   const createOptions = (spec: MachineSpec, network: string): Dockerode.ContainerCreateOptions => {
     const memory = Math.round(spec.limits.memoryMb * 1024 * 1024)
     return {
-      name: containerName(spec),
+      name: containerName(spec, namespace),
       Image: spec.image ?? defaultImage,
       Cmd: ['sleep', 'infinity'],
       User: AGENT_USER,
       WorkingDir: CONTAINER_HOME,
       Env: [`HOME=${CONTAINER_HOME}`, 'LANG=C.UTF-8', 'TERM=dumb'],
       Labels: {
+        ...instanceLabels,
         [LABEL_COMPANY]: spec.companySlug,
         [LABEL_AGENT]: spec.agentId,
         [LABEL_SPEC]: JSON.stringify(spec)
       },
+      ...(options.apiNetwork === undefined
+        ? {}
+        : { NetworkingConfig: { EndpointsConfig: { [network]: {}, [options.apiNetwork]: {} } } }),
       HostConfig: {
         Binds: [`${spec.homeDir}:${CONTAINER_HOME}`],
         CapDrop: ['ALL'],
@@ -213,7 +242,10 @@ export const makeDockerProvider = (options: DockerProviderOptions = {}): Machine
   const inspectOrNull = (agentId: string, name: string) =>
     tryDocker(agentId, 'inspect', async () => {
       try {
-        return await docker.getContainer(name).inspect()
+        const info = await docker.getContainer(name).inspect()
+        if (!owns(info.Config.Labels))
+          throw new Error('container belongs to a different installation')
+        return info
       } catch (cause) {
         if (statusCode(cause) === 404) return null
         throw cause
@@ -695,9 +727,10 @@ export const makeDockerProvider = (options: DockerProviderOptions = {}): Machine
 
   // -- machine -------------------------------------------------------------
 
-  const makeMachine = (spec: MachineSpec): Machine => {
-    const name = containerName(spec)
-    const container = docker.getContainer(name)
+  const makeMachine = (spec: MachineSpec, containerId: string): Machine => {
+    const name = containerName(spec, namespace)
+    // Retain the immutable Docker ID so an old handle never operates on a replacement.
+    const container = docker.getContainer(containerId)
     const agentId = spec.agentId
 
     const execStream = (o: ExecOptions) =>
@@ -708,9 +741,9 @@ export const makeDockerProvider = (options: DockerProviderOptions = {}): Machine
       provider: 'docker',
       spec,
       paths: { home: CONTAINER_HOME, hostHome: spec.homeDir },
-      status: () => inspectOrNull(agentId, name).pipe(Effect.map(toStatus)),
+      status: () => inspectOrNull(agentId, containerId).pipe(Effect.map(toStatus)),
       start: () =>
-        inspectOrNull(agentId, name).pipe(
+        inspectOrNull(agentId, containerId).pipe(
           Effect.flatMap((info) =>
             info === null
               ? Effect.fail(unavailable(agentId, 'container missing; call ensure()'))
@@ -748,6 +781,7 @@ export const makeDockerProvider = (options: DockerProviderOptions = {}): Machine
   }
 
   const specFromLabels = (labels: Record<string, string> | undefined): MachineSpec | null => {
+    if (!owns(labels)) return null
     const raw = labels?.[LABEL_SPEC]
     if (raw === undefined) return null
     try {
@@ -767,36 +801,43 @@ export const makeDockerProvider = (options: DockerProviderOptions = {}): Machine
           )
         )
         const network = yield* ensureNetwork(spec)
-        const name = containerName(spec)
+        const name = containerName(spec, namespace)
         let info = yield* inspectOrNull(spec.agentId, name)
         if (info === null) {
           yield* createContainer(spec, network)
           info = yield* inspectOrNull(spec.agentId, name)
         }
-        if (info === null || !info.State.Running) {
-          yield* startContainer(spec.agentId, docker.getContainer(name))
+        if (info === null) return yield* unavailable(spec.agentId, 'container missing after create')
+        if (!info.State.Running) {
+          yield* startContainer(spec.agentId, docker.getContainer(info.Id))
         }
-        return makeMachine(spec)
+        return makeMachine(spec, info.Id)
       }),
     get: (agentId) =>
       tryDocker(agentId, 'list', async () => {
         const found = await docker.listContainers({
           all: true,
-          filters: JSON.stringify({ label: [`${LABEL_AGENT}=${agentId}`] })
+          filters: JSON.stringify({ label: [`${LABEL_AGENT}=${agentId}`, ...instanceFilter] })
         })
-        const spec = specFromLabels(found[0]?.Labels)
-        return spec === null ? Option.none() : Option.some(makeMachine(spec))
+        for (const container of found) {
+          const spec = specFromLabels(container.Labels)
+          if (spec !== null && spec.agentId === agentId)
+            return Option.some(makeMachine(spec, container.Id))
+        }
+        return Option.none()
       }),
     list: (companyId) =>
       tryDocker(companyId, 'list', async () => {
         const found = await docker.listContainers({
           all: true,
-          filters: JSON.stringify({ label: [LABEL_AGENT] })
+          filters: JSON.stringify({ label: [LABEL_AGENT, ...instanceFilter] })
         })
-        return found
-          .map((c) => specFromLabels(c.Labels))
-          .filter((s): s is MachineSpec => s !== null && s.companyId === companyId)
-          .map(makeMachine)
+        return found.flatMap((container) => {
+          const spec = specFromLabels(container.Labels)
+          return spec !== null && spec.companyId === companyId
+            ? [makeMachine(spec, container.Id)]
+            : []
+        })
       }),
     destroy: (agentId) =>
       provider.get(agentId).pipe(

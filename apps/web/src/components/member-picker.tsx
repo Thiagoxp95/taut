@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { CheckIcon, PlusIcon } from 'lucide-react'
+import { CheckIcon, PlusIcon } from '@taut/ui/components/icons'
 import type { AgentId, MemberKind, UserId } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 import {
@@ -70,6 +70,8 @@ export function MemberPicker({
                   onSelect={() => pick(candidate)}
                 >
                   <EntityAvatar
+                    onProfileNavigate={() => setOpen(false)}
+                    memberId={candidate.id}
                     avatar={candidate.avatar}
                     kind={candidate.kind}
                     face={candidate.face}
@@ -114,6 +116,8 @@ export function MemberSelect({
           ) : (
             <>
               <EntityAvatar
+                onProfileNavigate={() => setOpen(false)}
+                memberId={selected.id}
                 avatar={selected.avatar}
                 kind={selected.kind}
                 face={selected.face}
@@ -141,6 +145,8 @@ export function MemberSelect({
                   }}
                 >
                   <EntityAvatar
+                    onProfileNavigate={() => setOpen(false)}
+                    memberId={candidate.id}
                     avatar={candidate.avatar}
                     kind={candidate.kind}
                     face={candidate.face}

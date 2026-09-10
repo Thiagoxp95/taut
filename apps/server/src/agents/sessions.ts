@@ -44,13 +44,17 @@ export class AgentSessions extends Effect.Service<AgentSessions>()('AgentSession
         channelId: ChannelId,
         sessionId: Schema.String,
         lastMessageId: Schema.NullOr(MessageId),
-        at: Schema.String
+        at: Schema.String,
+        mandate: Schema.NullOr(Schema.String)
       }),
       execute: (r) => sql`
         INSERT INTO agent_sessions
           (agent_id, thread_id, channel_id, runtime, session_id, last_message_id, updated_at)
-        VALUES (${r.agentId}, ${r.threadId}, ${r.channelId}, ${r.runtime}, ${r.sessionId},
-                ${r.lastMessageId}, ${r.at})
+        SELECT ${r.agentId}, ${r.threadId}, ${r.channelId}, ${r.runtime}, ${r.sessionId},
+               ${r.lastMessageId}, ${r.at}
+        WHERE ${r.mandate} IS NULL OR EXISTS (
+          SELECT 1 FROM agents WHERE id = ${r.agentId} AND mandate = ${r.mandate} AND archived_at IS NULL
+        )
         ON CONFLICT (agent_id, thread_id) DO UPDATE SET
           channel_id = excluded.channel_id,
           runtime = excluded.runtime,
@@ -94,7 +98,9 @@ export class AgentSessions extends Effect.Service<AgentSessions>()('AgentSession
         channelId: ChannelId,
         runtime: RuntimeKind,
         sessionId: string,
-        lastMessageId: MessageId | undefined
+        lastMessageId: MessageId | undefined,
+        /** Snapshot at run start: an approval during the reply must not resurrect the old session. */
+        mandate?: string
       ) =>
         upsert({
           agentId,
@@ -103,7 +109,8 @@ export class AgentSessions extends Effect.Service<AgentSessions>()('AgentSession
           runtime,
           sessionId,
           lastMessageId: lastMessageId ?? null,
-          at: nowIso()
+          at: nowIso(),
+          mandate: mandate ?? null
         }),
       clear: (agentId: AgentId, threadId: MessageId) =>
         remove({ agentId, threadId }).pipe(Effect.zipRight(removeContext({ agentId, threadId })))

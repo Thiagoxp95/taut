@@ -1,6 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
-import { BotIcon } from 'lucide-react'
+import { SettingsIcon } from '@taut/ui/components/icons'
 import { Button } from '@taut/ui/components/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@taut/ui/components/tooltip'
 import { ChannelView } from '@/components/channel-view'
 import { EntityAvatar } from '@/components/entity-avatar'
 import { presenceLabel } from '@/components/presence-dot'
@@ -40,6 +41,7 @@ function DirectMessageRoute() {
       }
       headerAvatar={
         <EntityAvatar
+          memberId={partner?.id}
           avatar={avatar}
           kind={partner?.kind ?? 'user'}
           face={partner?.face}
@@ -50,12 +52,20 @@ function DirectMessageRoute() {
       }
       headerActions={
         agent === undefined ? null : (
-          <Button asChild variant="ghost" size="sm">
-            <Link to="/agents/$agentId" params={{ agentId: agent.id }}>
-              <BotIcon />
-              Agent profile
-            </Link>
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button asChild variant="ghost" size="icon">
+                <Link
+                  to="/agents/$agentId"
+                  params={{ agentId: agent.id }}
+                  aria-label="Agent settings"
+                >
+                  <SettingsIcon className="size-5" />
+                </Link>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Agent settings</TooltipContent>
+          </Tooltip>
         )
       }
       intro={

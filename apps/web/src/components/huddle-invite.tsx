@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { HeadphonesIcon, PhoneOffIcon } from 'lucide-react'
+import { HeadphonesIcon, PhoneOffIcon } from '@taut/ui/components/icons'
 import type { Call, CallId, ChannelId } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 
@@ -25,6 +25,7 @@ function InviteCard({
   return (
     <div className="flex w-80 items-center gap-3 rounded-xl border bg-popover p-3 text-popover-foreground shadow-lg">
       <EntityAvatar
+        memberId={partner?.id}
         avatar={partner?.avatar}
         kind={partner?.kind ?? 'user'}
         face={partner?.face}

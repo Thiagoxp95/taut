@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { MailCheckIcon, PartyPopperIcon } from 'lucide-react'
+import { MailCheckIcon, PartyPopperIcon } from '@taut/ui/components/icons'
 import { AcceptInviteResult } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 import { Input } from '@taut/ui/components/input'

@@ -17,7 +17,7 @@ import type { Agent, Company } from '@taut/contract/domain'
 import { CompanyId, RepositoryId, TaskId, UserId } from '@taut/contract/ids'
 import { Effect, Layer, Redacted } from 'effect'
 import { createHmac, generateKeyPairSync } from 'node:crypto'
-import { afterAll, describe, expect } from 'vitest'
+import { afterAll, describe, expect, vi } from 'vitest'
 import { AgentApi } from '../src/agents/agentApi.js'
 import { AppConfig } from '../src/config.js'
 import { GitHubApp } from '../src/services/githubApp.js'
@@ -429,9 +429,63 @@ describe('repositories: the GitHub callback and setup redirects', () => {
   layer(testApp(redirectDir, { TAUT_PUBLIC_URL: 'https://taut.example' }), {
     excludeTestServices: true
   })((it) => {
+    it.effect('expired browser handoffs are refused', () =>
+      Effect.gen(function* () {
+        const github = yield* GitHubApp
+        const manifest = yield* github.manifest(COMPANY, OWNER, 'Example')
+        const token = new URL(manifest.browserUrl).searchParams.get('token') ?? ''
+        const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60 * 1000 + 1)
+        try {
+          expect((yield* Effect.either(github.takeBrowserManifest(token)))._tag).toBe('Left')
+        } finally {
+          now.mockRestore()
+        }
+      })
+    )
+
+    it.effect('desktop handoff serves the manifest without browser cookies and only once', () =>
+      Effect.gen(function* () {
+        const owner = yield* makeClient
+        yield* owner.api.auth.signup({
+          payload: { email: 'handoff@taut.local', password: 'password123', name: 'Owner' }
+        })
+        yield* owner.api.companies.create({
+          payload: { slug: 'handoff', name: 'Acme "Tools" <script>alert(1)</script>', avatar }
+        })
+        const manifest = yield* owner.api.repositories.githubManifest()
+        expect(manifest.browserUrl).toBeTypeOf('string')
+        const { http } = yield* baseUrl
+        const url = new URL(manifest.browserUrl)
+        const response = yield* Effect.promise(() => fetch(`${http}${url.pathname}${url.search}`))
+        expect(response.status).toBe(200)
+        expect(response.headers.get('content-type')).toContain('text/html')
+        expect(response.headers.get('cache-control')).toBe('no-store')
+        expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+        const html = yield* Effect.promise(() => response.text())
+        expect(html).toContain('method="POST"')
+        expect(html).toContain('https://github.com/settings/apps/new?state=')
+        expect(html).toContain('name="manifest"')
+        expect(html).toContain('&quot;default_permissions&quot;')
+        expect(html).not.toContain('<script>alert(1)</script>')
+        const replay = yield* Effect.promise(() =>
+          fetch(`${http}${url.pathname}${url.search}`, { redirect: 'manual' })
+        )
+        expect(replay.status).toBe(302)
+        expect(replay.headers.get('location')).toContain('github=error')
+        const github = yield* GitHubApp
+        expect((yield* github.consumeState(manifest.state)).userId).toBeDefined()
+      })
+    )
+
     it.effect('both legs answer a bad state with a 302 back to the settings page', () =>
       Effect.gen(function* () {
         const { http } = yield* baseUrl
+
+        const start = yield* Effect.promise(() =>
+          fetch(`${http}/api/repositories/github/start?token=forged`, { redirect: 'manual' })
+        )
+        expect(start.status).toBe(302)
+        expect(start.headers.get('location')).toContain('github=error')
 
         const callback = yield* Effect.promise(() =>
           fetch(`${http}/api/repositories/github/callback?code=abc&state=forged`, {

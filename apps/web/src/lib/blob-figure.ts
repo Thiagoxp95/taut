@@ -81,6 +81,9 @@ export interface Face {
   /** This agent's own timings, so a channel of blobatars is a crowd not a pulse. */
   readonly seeds: IdleSeeds
   scale: number
+  /** Radial silhouette, sampled once and expanded into a circle as context fills. */
+  contour?: readonly number[]
+  head: string
 }
 
 const faces = new Map<string, Face>()
@@ -109,6 +112,7 @@ export function blobFace(seed: string, shape: number | undefined, px: number): F
       frames: posed.eyeFrames.map(({ cx, cy, rot }) => ({ cx, cy, rot })),
       eyeFill: posed.fill.eye,
       seeds: idleSeeds(seed, shape === undefined ? {} : { traits: { shape } }),
+      head: headColor(seed, shape),
       scale: 0
     }
     faces.set(key, face)
@@ -153,9 +157,11 @@ export function drawBlobFace(
   face: Face,
   px: number,
   t: number,
-  amp: number
+  amp: number,
+  fullness = 0
 ): void {
-  const f = idleAt(face.seeds, t, amp)
+  const filled = Number.isFinite(fullness) ? Math.max(0, Math.min(1, fullness)) : 0
+  const f = idleAt(face.seeds, t, amp * (1 - filled))
   const s = px / BOX
   ctx.save()
   ctx.scale(s, s)
@@ -163,7 +169,29 @@ export function drawBlobFace(
   ctx.scale(f.breathe[0], f.breathe[1])
   ctx.translate(-BOX / 2, -BOX / 2)
   ctx.translate(0, f.bob)
-  ctx.drawImage(face.body, 0, 0, BOX, BOX)
+  if (filled === 0) {
+    ctx.drawImage(face.body, 0, 0, BOX, BOX)
+  } else {
+    ctx.fillStyle = face.head
+    ctx.beginPath()
+    if (filled === 1) {
+      ctx.arc(50, 50, 46, 0, TAU)
+    } else {
+      const contour = face.contour ?? (face.contour = silhouette(face))
+      for (let i = 0; i < contour.length; i += 1) {
+        const angle = (i / contour.length) * TAU
+        const radius = contour[i]! + (46 - contour[i]!) * filled
+        const x = 50 + Math.cos(angle) * radius
+        const y = 50 + Math.sin(angle) * radius
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.closePath()
+    }
+    ctx.fill()
+  }
+  // The character becomes a solid disc at capacity; its eyes return after compaction.
+  ctx.globalAlpha *= 1 - filled ** 3
   ctx.translate(f.saccade[0], f.saccade[1])
   ctx.fillStyle = face.eyeFill
   for (let i = 0; i < face.eyes.length; i += 1) {
@@ -183,6 +211,34 @@ export function drawBlobFace(
     ctx.restore()
   }
   ctx.restore()
+}
+
+/** Union of body and petals, so every department silhouette rounds out continuously. */
+function silhouette(face: Face): readonly number[] {
+  const ctx = face.body.getContext('2d')
+  if (ctx === null) return Array<number>(192).fill(32)
+  const paths = face.marks.map((mark) => {
+    if (mark.kind === 'path') return new Path2D(mark.d)
+    const path = new Path2D()
+    path.arc(mark.cx, mark.cy, mark.r, 0, TAU)
+    return path
+  })
+  ctx.save()
+  ctx.resetTransform()
+  const contour = Array.from({ length: 192 }, (_, i) => {
+    const angle = (i / 192) * TAU
+    const x = Math.cos(angle)
+    const y = Math.sin(angle)
+    // Outermost hit includes protruding lobes. Half-unit steps are subpixel at avatar sizes.
+    for (let radius = 49; radius > 0; radius -= 0.5) {
+      if (paths.some((path) => ctx.isPointInPath(path, 50 + x * radius, 50 + y * radius))) {
+        return radius
+      }
+    }
+    return 0
+  })
+  ctx.restore()
+  return contour
 }
 
 // --- the particles ------------------------------------------------------------
@@ -245,18 +301,25 @@ const particles = new Map<string, BlobParticles>()
 export function blobParticles(
   seed: string,
   shape: number | undefined,
-  preset: number
+  preset: number,
+  fullness = 0
 ): BlobParticles {
-  const key = `${seed}|${shape ?? '-'}|${preset}`
+  const filled = Math.round(fullness * 20) / 20
+  const key = `${seed}|${shape ?? '-'}|${preset}|${filled}`
   const hit = particles.get(key)
   if (hit !== undefined) return hit
   if (particles.size > 96) particles.clear()
-  const built = buildParticles(seed, shape, preset)
+  const built = buildParticles(seed, shape, preset, filled)
   particles.set(key, built)
   return built
 }
 
-function buildParticles(seed: string, shape: number | undefined, preset: number): BlobParticles {
+function buildParticles(
+  seed: string,
+  shape: number | undefined,
+  preset: number,
+  fullness: number
+): BlobParticles {
   const fills = [...new Set(_marks(seed, opts(shape)).marks.map((mark) => mark.fill))]
   const ctx = sampler()
   const empty: BlobParticles = {
@@ -275,7 +338,8 @@ function buildParticles(seed: string, shape: number | undefined, preset: number)
 
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, BOX, BOX)
-  drawMarks(ctx, seed, shape)
+  if (fullness === 0) drawMarks(ctx, seed, shape)
+  else drawBlobFace(ctx, blobFace(seed, shape, BOX), BOX, 0, 0, fullness)
   const pixels = ctx.getImageData(0, 0, BOX, BOX).data
 
   const rgb = fills.map((fill) => {

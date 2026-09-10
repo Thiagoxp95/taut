@@ -1,26 +1,20 @@
 # Deploying Taut
 
+For the supported installer and current verification status, start with [self-hosting](self-hosting.md). For a single shared service, see [Railway deployment](railway.md). The recipes below describe manual Docker configuration.
+
 One container, one volume, one secret; a €4/mo VPS with Docker and Compose v2 is enough (agent-model §0).
 
-## 1. Up
+## 1. Install and enable HTTPS
 
-`TAUT_MASTER_KEY` encrypts every vault item. Keep it — **lose it, lose the vault.**
+Use [the self-host installer](self-hosting.md) or [repeatable cloud provisioning](cloud-provisioning.md).
+These build the API/web and agent images, configure persistent paths, generate secrets and wire
+agent access to the server. The root `docker-compose.yml` is retained only for existing
+named-volume installations; it does not configure the complete agent deployment by itself.
+Do not replace an existing named-volume deployment with a fresh installer directory and expect
+its data to migrate automatically. Back it up and plan the data/path migration first.
 
-```sh
-git clone https://github.com/<you>/taut.git && cd taut
-echo "TAUT_MASTER_KEY=$(openssl rand -base64 32)" > .env
-docker compose up -d
-curl localhost:3000/api/health          # {"ok":true,"version":"…"}
-```
-
-Open `http://<host>:3000`; the first visit lands on `/signup` and that account
-owns the first company. On plain HTTP add `TAUT_COOKIE_SECURE=false` to `.env`,
-or login bounces you straight back.
-
-## 2. TLS
-
-Uncomment the `caddy` service in `docker-compose.yml`, drop `ports:` from `taut`,
-and add a `Caddyfile` beside it: `taut.example.com` then `reverse_proxy taut:3000`.
+The installer guide covers Caddy HTTPS and secure cookies. The sections below describe optional
+service configuration and historical operational details.
 
 ## 2b. Notifications on phones (PWA)
 
@@ -75,14 +69,14 @@ Open on the firewall: `7880/tcp` (signal), `7881/tcp` (ICE over TCP),
 `49160-49200/udp` (TURN relay range).
 
 ```sh
-docker compose --profile calls up -d
+docker compose -f docker-compose.yml -f deploy/compose.calls.yml --profile calls up -d
 ```
 
 **Scale.** One LiveKit node on bridge networking is fine up to roughly 100
 concurrent participants; past that, `rtc.udp_port` stops being viable because
 every media stream shares one mapped port. Switch the `livekit` service to
 `network_mode: host` and give `rtc` a real UDP port range, in the `livekit`
-config at the bottom of `docker-compose.yml`, instead of the single port (D9).
+config in `deploy/compose.calls.yml`, instead of the single port (D9).
 That is a config change, not a rebuild.
 
 **TURN over TLS.** The default profile listens for TURN on plain UDP/TCP 3478,
@@ -97,7 +91,7 @@ TURN host. Treat it as a production hardening step, not part of first bring-up
 Agent runtimes (claude, codex, opencode) live in a _second_ image, built on the host before your first agent:
 
 ```sh
-docker build -f packages/runtime/docker/agent.Dockerfile -t taut/agent:latest packages/runtime/docker
+docker build -f packages/runtime/docker/agent.Dockerfile -t taut/agent:latest .
 ```
 
 The `docker` MachineProvider drives `/var/run/docker.sock` (already mounted) and needs the
@@ -119,11 +113,7 @@ docker compose start taut
 
 `git pull && docker compose up -d --build`. Migrations run at boot; back up first, there is no downgrade path.
 
-## 6. Hetzner CX22, from zero
+## 6. Repeatable cloud hosts
 
-```sh
-ssh root@<ip> 'curl -fsSL https://get.docker.com | sh && \
-  git clone https://github.com/<you>/taut.git /opt/taut && cd /opt/taut && \
-  { echo "TAUT_MASTER_KEY=$(openssl rand -base64 32)"; echo TAUT_COOKIE_SECURE=false; } > .env && \
-  docker compose up -d --build && docker compose logs --tail=20 taut'
-```
+See [cloud provisioning](cloud-provisioning.md) for the validated Terraform customer map,
+per-customer hosts, HTTPS, optional calls, and pinned application commits.

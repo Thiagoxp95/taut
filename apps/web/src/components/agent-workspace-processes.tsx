@@ -6,7 +6,7 @@
  * a runtime mid-task would corrupt the task and its handover.
  */
 import * as React from 'react'
-import { ActivityIcon } from 'lucide-react'
+import { ActivityIcon } from '@taut/ui/components/icons'
 import type { AgentId, MachineInfo, ProcessEntry } from '@taut/contract'
 import { Skeleton } from '@taut/ui/components/skeleton'
 

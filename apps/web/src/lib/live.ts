@@ -7,8 +7,20 @@
  */
 import * as React from 'react'
 import type { AgentPresence, ThreadContext, UserPresence } from '@taut/contract'
+import {
+  emptyCanvasState,
+  reduceCanvasScopes,
+  type CanvasAction,
+  type CanvasState
+} from './canvas-state'
 
 export type Presence = UserPresence | AgentPresence
+
+/** The line under a streaming reply: a brief public progress summary, or the tool it just called. */
+export interface Activity {
+  readonly kind: 'thinking' | 'tool'
+  readonly text: string
+}
 
 class Store<T> {
   #value: T
@@ -63,6 +75,13 @@ const messageErrorStore = new Store<ReadonlyMap<string, string>>(new Map())
 const liveTriggerStore = new Store<ReadonlyMap<string, number>>(new Map())
 
 /**
+ * Streaming message id → what its agent is doing this second
+ * (docs/build-plan-activity.md). One line, replaced in place, gone the moment the run ends:
+ * it is the narration under a reply that has not written its first word, not a history.
+ */
+const activityStore = new Store<ReadonlyMap<string, Activity>>(new Map())
+
+/**
  * `agentId:threadId` → how full that copy's window is
  * (docs/build-plan-context-meter.md). The key is the pair because the pair is what owns a
  * context: the same agent in two threads is two windows, and two agents in one thread are
@@ -70,8 +89,23 @@ const liveTriggerStore = new Store<ReadonlyMap<string, number>>(new Map())
  * refresh mid-run does not blank every ring on screen.
  */
 const contextStore = new Store<ReadonlyMap<string, ThreadContext>>(new Map())
+const canvasStore = new Store<ReadonlyMap<string, CanvasState>>(new Map())
 
 const contextKey = (agentId: string, threadId: string): string => `${agentId}:${threadId}`
+
+export interface ThreadRun {
+  readonly threadId: string
+  readonly messageId: string
+  readonly agentId: string
+}
+
+const threadRunStore = new Store<readonly ThreadRun[]>([])
+
+export interface BrowserRun extends ThreadRun {
+  readonly taskId: string
+  readonly channelId: string
+}
+const browserRunStore = new Store<readonly BrowserRun[]>([])
 
 /**
  * Task id → the message that triggered it, so an end event can find what to decrement, plus the
@@ -83,11 +117,18 @@ const contextKey = (agentId: string, threadId: string): string => `${agentId}:${
  * while the second agent was still writing.
  */
 interface CountedTask {
+  readonly reply?: ThreadRun
   readonly triggerMessageId: string
   readonly epoch: number
 }
 
 const countedTasks = new Map<string, CountedTask>()
+
+function publishThreadRuns(): void {
+  threadRunStore.set(
+    [...countedTasks.values()].flatMap((entry) => (entry.reply === undefined ? [] : [entry.reply]))
+  )
+}
 
 /** Bumped by every run start the socket reports, so a seed can date its own snapshot. */
 let runEpoch = 0
@@ -112,6 +153,17 @@ function withEntry<K, V>(map: ReadonlyMap<K, V>, key: K, value: V): ReadonlyMap<
 }
 
 export const live = {
+  setBrowserRun(run: BrowserRun): void {
+    if (endedTasks.has(run.taskId)) return
+    browserRunStore.update((runs) =>
+      runs.some((current) => current.taskId === run.taskId) ? runs : [...runs, run]
+    )
+  },
+
+  canvas(channelId: string, action: CanvasAction, threadId?: string): void {
+    canvasStore.update((current) => reduceCanvasScopes(current, channelId, action, threadId))
+  },
+
   setPresence(memberId: string, presence: Presence): void {
     presenceStore.update((current) =>
       current.get(memberId) === presence ? current : withEntry(current, memberId, presence)
@@ -161,16 +213,32 @@ export const live = {
     }, TYPING_TTL_MS + 50)
   },
 
+  /** The newest line wins; there is only ever one per message. */
+  setActivity(messageId: string, activity: Activity): void {
+    activityStore.update((current) => withEntry(current, messageId, activity))
+  },
+
+  /** The run ended: the narration goes with it, whether the reply landed or failed. */
+  clearActivity(messageId: string): void {
+    activityStore.update((current) => {
+      if (!current.has(messageId)) return current
+      const next = new Map(current)
+      next.delete(messageId)
+      return next
+    })
+  },
+
   setMessageError(messageId: string, error: string): void {
     messageErrorStore.update((current) => withEntry(current, messageId, error))
   },
 
   /** A run against `triggerMessageId` started. */
-  startRun(triggerMessageId: string | undefined, taskId: string): void {
+  startRun(triggerMessageId: string | undefined, taskId: string, reply?: ThreadRun): void {
     if (triggerMessageId === undefined) return
     if (countedTasks.has(taskId)) return
     runEpoch += 1
-    countedTasks.set(taskId, { triggerMessageId, epoch: runEpoch })
+    countedTasks.set(taskId, { triggerMessageId, epoch: runEpoch, reply })
+    publishThreadRuns()
     liveTriggerStore.update((current) =>
       withEntry(current, triggerMessageId, (current.get(triggerMessageId) ?? 0) + 1)
     )
@@ -178,14 +246,16 @@ export const live = {
 
   /** A run ended — done, failed or cancelled alike (D7): the shimmer must stop either way. */
   endRun(taskId: string): void {
+    browserRunStore.update((runs) => runs.filter((run) => run.taskId !== taskId))
     const entry = countedTasks.get(taskId)
-    if (entry === undefined) return
     countedTasks.delete(taskId)
+    publishThreadRuns()
     endedTasks.add(taskId)
     if (endedTasks.size > ENDED_MEMORY) {
       const oldest = endedTasks.values().next()
       if (oldest.done !== true) endedTasks.delete(oldest.value)
     }
+    if (entry === undefined) return
     liveTriggerStore.update((current) => {
       const left = (current.get(entry.triggerMessageId) ?? 1) - 1
       const next = new Map(current)
@@ -207,7 +277,9 @@ export const live = {
    * makes this the recovery path after a refresh or a reconnect.
    */
   seedRuns(
-    runs: ReadonlyArray<{ readonly taskId: string; readonly triggerMessageId?: string }>,
+    runs: ReadonlyArray<
+      { readonly taskId: string; readonly triggerMessageId?: string } & Partial<ThreadRun>
+    >,
     since = runEpoch
   ): void {
     const kept = new Map<string, CountedTask>()
@@ -217,7 +289,14 @@ export const live = {
     for (const run of runs) {
       if (run.triggerMessageId === undefined) continue
       if (kept.has(run.taskId) || endedTasks.has(run.taskId)) continue
-      kept.set(run.taskId, { triggerMessageId: run.triggerMessageId, epoch: since })
+      kept.set(run.taskId, {
+        triggerMessageId: run.triggerMessageId,
+        epoch: since,
+        reply:
+          run.threadId !== undefined && run.messageId !== undefined && run.agentId !== undefined
+            ? { threadId: run.threadId, messageId: run.messageId, agentId: run.agentId }
+            : undefined
+      })
     }
     countedTasks.clear()
     const counts = new Map<string, number>()
@@ -226,6 +305,8 @@ export const live = {
       counts.set(entry.triggerMessageId, (counts.get(entry.triggerMessageId) ?? 0) + 1)
     }
     liveTriggerStore.set(counts)
+    browserRunStore.update((current) => current.filter((run) => kept.has(run.taskId)))
+    publishThreadRuns()
   },
 
   setThreadContext(context: ThreadContext): void {
@@ -263,12 +344,23 @@ export const live = {
     typingStore.set(new Map())
     messageErrorStore.set(new Map())
     liveTriggerStore.set(new Map())
+    activityStore.set(new Map())
+    browserRunStore.set([])
     contextStore.set(new Map())
+    canvasStore.set(new Map())
     countedTasks.clear()
+    publishThreadRuns()
     endedTasks.clear()
     runEpoch = 0
     seqToChannel.clear()
   }
+}
+
+export function useCanvasState(channelId: string, threadId?: string): CanvasState {
+  const map = React.useSyncExternalStore(canvasStore.subscribe, canvasStore.get)
+  return (
+    map.get(threadId === undefined ? channelId : `${channelId}:${threadId}`) ?? emptyCanvasState
+  )
 }
 
 export function usePresence(memberId: string | undefined, fallback: Presence): Presence {
@@ -323,6 +415,16 @@ export function useTypingUsers(channelId: string, exceptUserId?: string): readon
   }, [channel, exceptUserId])
 }
 
+/**
+ * What `messageId`'s agent is doing right now, or `undefined` when nothing has been said —
+ * before the first tool call, and always for a runtime that reports neither reasoning nor
+ * tools (cursor).
+ */
+export function useMessageActivity(messageId: string): Activity | undefined {
+  const map = React.useSyncExternalStore(activityStore.subscribe, activityStore.get)
+  return map.get(messageId)
+}
+
 export function useMessageError(messageId: string): string | undefined {
   const map = React.useSyncExternalStore(messageErrorStore.subscribe, messageErrorStore.get)
   return map.get(messageId)
@@ -335,4 +437,36 @@ export function useMessageError(messageId: string): string | undefined {
 export function useIsInvoking(messageId: string): boolean {
   const map = React.useSyncExternalStore(liveTriggerStore.subscribe, liveTriggerStore.get)
   return (map.get(messageId) ?? 0) > 0
+}
+
+/** Pending replies remain visible even when the thread has never been opened. */
+export function useThreadRuns(threadId: string): readonly ThreadRun[] {
+  const runs = React.useSyncExternalStore(threadRunStore.subscribe, threadRunStore.get)
+  return React.useMemo(() => runs.filter((run) => run.threadId === threadId), [runs, threadId])
+}
+
+/** The exact run behind this reply, for interrupting one agent without stopping its peers. */
+export function useMessageTaskId(messageId: string): string | undefined {
+  return React.useSyncExternalStore(threadRunStore.subscribe, () => {
+    for (const [taskId, entry] of countedTasks) {
+      if (entry.reply?.messageId === messageId) return taskId
+    }
+    return undefined
+  })
+}
+
+/** Browser use stays attached to its task until completion, independent of status copy. */
+export function useBrowserRuns(
+  channelId: string | undefined,
+  threadId?: string
+): readonly BrowserRun[] {
+  const runs = React.useSyncExternalStore(browserRunStore.subscribe, browserRunStore.get)
+  return React.useMemo(
+    () =>
+      runs.filter(
+        (run) =>
+          run.channelId === channelId && (threadId === undefined || run.threadId === threadId)
+      ),
+    [runs, channelId, threadId]
+  )
 }

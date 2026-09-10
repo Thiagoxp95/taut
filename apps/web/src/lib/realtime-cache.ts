@@ -64,7 +64,16 @@ export function applyRealtimeEvent(event: Event, context: RealtimeContext): void
   }
 
   switch (event.type) {
+    case 'canvas.changed': {
+      const { canvas, action } = event.payload
+      live.canvas(canvas.channelId, { type: 'change', canvas, action })
+      invalidate(qk.canvases(canvas.channelId))
+      invalidate(qk.canvas(canvas.channelId, canvas.id))
+      return
+    }
+
     case 'message.created': {
+      invalidate(qk.dmInbox)
       const { message } = event.payload
       live.rememberSeq(event.seq, message.channelId)
       addMessage(queryClient, message)
@@ -82,10 +91,12 @@ export function applyRealtimeEvent(event: Event, context: RealtimeContext): void
     }
 
     case 'message.updated':
+      invalidate(qk.dmInbox)
       updateMessage(queryClient, event.payload.message)
       return
 
     case 'message.deleted':
+      invalidate(qk.dmInbox)
       removeMessage(queryClient, event.payload.messageId)
       return
 
@@ -94,12 +105,33 @@ export function applyRealtimeEvent(event: Event, context: RealtimeContext): void
       addMessage(queryClient, event.payload.message)
       live.setPresence(event.payload.task.agentId, 'working')
       // The message that invoked the agent shimmers until this run ends (build-plan-shimmer D2).
-      live.startRun(event.payload.task.triggerMessageId, event.payload.task.id)
+      live.startRun(event.payload.task.triggerMessageId, event.payload.task.id, {
+        threadId: event.payload.task.threadId,
+        messageId: event.payload.task.messageId,
+        agentId: event.payload.task.agentId
+      })
       invalidate(qk.tasks)
       return
 
     case 'agent.task.delta':
       appendToMessage(queryClient, event.payload.messageId, event.payload.delta)
+      return
+
+    // The muted line under a reply still being written (docs/build-plan-activity.md).
+    case 'agent.activity':
+      if (event.payload.browser && event.payload.channelId && event.payload.threadId) {
+        live.setBrowserRun({
+          taskId: event.payload.taskId,
+          messageId: event.payload.messageId,
+          agentId: event.payload.agentId,
+          channelId: event.payload.channelId,
+          threadId: event.payload.threadId
+        })
+      }
+      live.setActivity(event.payload.messageId, {
+        kind: event.payload.kind,
+        text: event.payload.text
+      })
       return
 
     // The ring around that agent's avatar, in that thread only
@@ -109,16 +141,20 @@ export function applyRealtimeEvent(event: Event, context: RealtimeContext): void
       return
 
     case 'agent.task.done':
+      invalidate(qk.dmInbox)
       updateMessage(queryClient, event.payload.message)
       live.setPresence(event.payload.task.agentId, 'idle')
+      live.clearActivity(event.payload.message.id)
       live.endRun(event.payload.task.id)
       invalidate(qk.tasks)
       return
 
     case 'agent.task.failed':
+      invalidate(qk.dmInbox)
       updateMessage(queryClient, event.payload.message)
       live.setMessageError(event.payload.message.id, event.payload.error)
       live.setPresence(event.payload.task.agentId, 'idle')
+      live.clearActivity(event.payload.message.id)
       live.endRun(event.payload.task.id)
       invalidate(qk.tasks)
       return
@@ -139,6 +175,7 @@ export function applyRealtimeEvent(event: Event, context: RealtimeContext): void
 
     case 'unread.changed':
       if (event.payload.userId === context.currentUserId) {
+        invalidate(qk.dmInbox)
         live.setUnread(event.payload.channelId, {
           unread: event.payload.unread,
           mentions: event.payload.mentions
@@ -181,6 +218,7 @@ export function applyRealtimeEvent(event: Event, context: RealtimeContext): void
     case 'department.created':
     case 'department.updated':
     case 'department.deleted':
+      invalidate(qk.allAuthorizations)
       invalidate(qk.departments)
       // `Agent.departmentIds` follows department membership.
       invalidate(qk.agents)
@@ -189,6 +227,7 @@ export function applyRealtimeEvent(event: Event, context: RealtimeContext): void
     case 'channel.created':
     case 'channel.updated':
     case 'channel.deleted':
+      invalidate(qk.dmInbox)
       invalidate(qk.channels)
       void queryClient.invalidateQueries({ queryKey: ['channel-members'] })
       return
@@ -246,6 +285,22 @@ export function applyRealtimeEvent(event: Event, context: RealtimeContext): void
       // A prefix: a sync replaces the whole mirror, and the connection row moved
       // with it (docs/build-plan-projects.md D6). The people mapping hangs off the
       // same prefix, so a remapping lands here too (D16).
+      invalidate(qk.projects)
+      return
+
+    case 'project.issue.created':
+    case 'project.issue.updated':
+    case 'project.issue.deleted':
+    case 'project.issue.thread.opened':
+      /*
+       * One ticket moved (docs/build-plan-issues.md D19). The same prefix again,
+       * and deliberately not a surgical write: a ticket is in the project's issue
+       * list, on its own page under two different keys (a `pis_…` and an
+       * identifier, D15) and possibly in a parent's sub-issue list, and an event
+       * that patched one of those and missed the others is how two screens of the
+       * same ticket end up disagreeing. The write has already been through Linear
+       * (D2), so what a refetch reads is the truth.
+       */
       invalidate(qk.projects)
       return
 

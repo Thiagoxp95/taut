@@ -9,7 +9,7 @@
  * Top to bottom: which event, then only that variant's filters, then the sentence.
  */
 import * as React from 'react'
-import { PlusIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
+import { PlusIcon, TriangleAlertIcon, XIcon } from '@taut/ui/components/icons'
 import {
   describeTrigger,
   SignalName,

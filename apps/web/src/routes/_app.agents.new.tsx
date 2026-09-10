@@ -1,8 +1,9 @@
 import * as React from 'react'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
-import { BotIcon, CheckIcon, ChevronLeftIcon, GlobeIcon } from 'lucide-react'
+import { BotIcon, CheckIcon, ChevronLeftIcon, GlobeIcon } from '@taut/ui/components/icons'
 import type {
   Avatar,
+  ConnectorInput,
   FileGrantMode,
   PermissionMode,
   RepositoryId,
@@ -21,6 +22,7 @@ import {
   SelectValue
 } from '@taut/ui/components/select'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@taut/ui/components/card'
+import { NewAgentConnectors } from '@/components/agent-connectors'
 import { RepoAccessRow, type RepoAccess } from '@/components/agent-repos'
 import { EntityAvatar } from '@/components/entity-avatar'
 import { ModelSelect } from '@/components/model-select'
@@ -137,6 +139,7 @@ function NewAgentRoute() {
   const repositories = useRepositories().data?.items ?? []
   const { departments } = useDepartmentList()
 
+  const [connectors, setConnectors] = React.useState<readonly ConnectorInput[]>([])
   const [name, setName] = React.useState('')
   const [handle, setHandle] = React.useState('')
   const [handleTouched, setHandleTouched] = React.useState(false)
@@ -195,6 +198,7 @@ function NewAgentRoute() {
         runtimeKind,
         permissionMode,
         browserAccess,
+        connectors,
         departmentId: department,
         pinnedSubscriptionId: pinned === 'none' ? undefined : parseSubscriptionId(pinned),
         model: model.trim() === '' ? undefined : model.trim(),
@@ -419,6 +423,12 @@ function NewAgentRoute() {
               </div>
             </CardContent>
           </Card>
+
+          <NewAgentConnectors
+            value={connectors}
+            onChange={setConnectors}
+            disabled={createAgent.isPending}
+          />
 
           {repositories.length === 0 ? null : (
             <Card>

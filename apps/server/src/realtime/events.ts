@@ -1,7 +1,10 @@
 import type { Event } from '@taut/contract/events'
-import type { ChannelId, CompanyId, MessageId, UserId } from '@taut/contract/ids'
+import type { AgentId, ChannelId, CompanyId, MessageId, TaskId, UserId } from '@taut/contract/ids'
 
-/** What travels on the in-process `Bus`. Typing is ephemeral: broadcast only, never logged. */
+/**
+ * What travels on the in-process `Bus`. Typing and Activity are ephemeral: broadcast only,
+ * never logged (docs/build-plan-activity.md D2).
+ */
 export type BusMessage =
   | { readonly _tag: 'Event'; readonly companyId: CompanyId; readonly event: Event }
   | {
@@ -10,6 +13,18 @@ export type BusMessage =
       readonly channelId: ChannelId
       readonly threadId?: MessageId | undefined
       readonly userId: UserId
+    }
+  | {
+      readonly _tag: 'Activity'
+      readonly companyId: CompanyId
+      readonly channelId: ChannelId
+      readonly threadId: MessageId
+      readonly taskId: TaskId
+      readonly messageId: MessageId
+      readonly agentId: AgentId
+      readonly kind: 'thinking' | 'tool'
+      readonly text: string
+      readonly browser?: boolean
     }
 
 /**

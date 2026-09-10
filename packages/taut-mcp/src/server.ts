@@ -18,9 +18,10 @@ export const SERVER_VERSION = '0.0.0'
 export const INSTRUCTIONS = [
   'You are a member of a Taut workspace. These tools are how you talk to your team and remember.',
   'Rules: check taut_inbox at checkpoints and right before taut_done. Call taut_done exactly once,',
-  'last. If taut_ask returns { parked: true }, end your turn — you will be resumed with the answer.',
+  'last. If taut_ask or ask_user_question returns { parked: true }, end your turn — you will be resumed with the answer.',
   'Search memory_search before asking a human something that may already have been decided.',
-  'Never use your own AskUserQuestion-style tools: the humans are in Taut, not at your terminal.'
+  'Use ask_user_question for human choices and render_component for themed timers or informational cards.',
+  'Never use terminal AskUserQuestion/request_user_input tools: the humans are in Taut.'
 ].join(' ')
 
 /** The production layer: real HTTP, env-driven config. */

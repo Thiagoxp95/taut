@@ -113,10 +113,15 @@ export class TerminalWsServer extends Effect.Service<TerminalWsServer>()('Termin
     const workspace = yield* Workspace
     const limits = yield* TerminalLimits
     const registry = makeTerminalRegistry(limits.maxPerAgent)
+    // Browser viewers do not own shells. Allow overlapping views (including a
+    // reconnect before cleanup finishes), with a separate per-agent resource cap.
+    const browserRegistry = makeTerminalRegistry(limits.maxPerAgent)
     /** agentId → the hold, while someone drives. */
     const controls = new Map<string, ControlHold>()
     /** agentId → every open socket's sender, so a hand-over reaches every viewer. */
     const viewers = new Map<string, Set<Send>>()
+    const viewerSessions = new WeakMap<WebSocket, { agentId: string; sessionId: string }>()
+    const controlLock = yield* Effect.makeSemaphore(1)
 
     const wss = yield* Effect.acquireRelease(
       Effect.sync(() => new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES })),
@@ -132,7 +137,17 @@ export class TerminalWsServer extends Effect.Service<TerminalWsServer>()('Termin
     const runConnection = yield* FiberSet.runtime(connections)<never>()
 
     const sendNow = (ws: WebSocket, frame: TerminalServerFrame): void => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(encodeFrame(frame)))
+      if (ws.readyState !== WebSocket.OPEN) return
+      const viewer = viewerSessions.get(ws)
+      const output =
+        frame._tag === 'control'
+          ? {
+              ...frame,
+              owned:
+                viewer !== undefined && controls.get(viewer.agentId)?.sessionId === viewer.sessionId
+            }
+          : frame
+      ws.send(JSON.stringify(encodeFrame(output)))
     }
     const send = (ws: WebSocket, frame: TerminalServerFrame) =>
       Effect.sync(() => sendNow(ws, frame))
@@ -175,13 +190,15 @@ export class TerminalWsServer extends Effect.Service<TerminalWsServer>()('Termin
       wantsPty: boolean
     ) =>
       Effect.gen(function* () {
+        viewerSessions.set(ws, { agentId: agent.id, sessionId })
         const closed = yield* Deferred.make<void>()
         ws.on('close', () => Deferred.unsafeDone(closed, Exit.void))
         ws.on('error', () => Deferred.unsafeDone(closed, Exit.void))
         yield* Effect.addFinalizer(() => close(ws, 1001, 'server shutting down'))
 
         // D10: one per (agent, viewer), at most `maxPerAgent` per agent.
-        const slot = registry.claim(agent.id, principal.userId, sessionId)
+        const slots = wantsPty ? registry : browserRegistry
+        const slot = slots.claim(agent.id, wantsPty ? principal.userId : sessionId, sessionId)
         if (Either.isLeft(slot)) {
           const why = slot.left
           yield* Effect.logInfo(`terminal: refused (${why})`)
@@ -194,10 +211,10 @@ export class TerminalWsServer extends Effect.Service<TerminalWsServer>()('Termin
             : refuse(
                 ws,
                 TERMINAL_CLOSE.agentFull,
-                `This agent already has ${limits.maxPerAgent} terminals open.`
+                `This agent already has ${limits.maxPerAgent} ${wantsPty ? 'terminals' : 'browser views'} open.`
               )
         }
-        yield* Effect.addFinalizer(() => Effect.sync(() => registry.release(agent.id, sessionId)))
+        yield* Effect.addFinalizer(() => Effect.sync(() => slots.release(agent.id, sessionId)))
 
         // A browser-only socket still needs the box, just not a shell in it.
         const opened = yield* Effect.either(
@@ -258,7 +275,7 @@ export class TerminalWsServer extends Effect.Service<TerminalWsServer>()('Termin
           }
           yield* Effect.logInfo(`terminal: control released (paused=${hold.paused})`)
           yield* broadcastControl(agent.id)
-        })
+        }).pipe(controlLock.withPermits(1))
         // Disconnect, idle and the cap all end here: the agent is never left frozen.
         yield* Effect.addFinalizer(() => releaseControl)
 
@@ -301,7 +318,7 @@ export class TerminalWsServer extends Effect.Service<TerminalWsServer>()('Termin
             controls.set(agent.id, { holder: principal.userId, sessionId, paused })
             yield* Effect.logInfo(`terminal: control taken (paused=${paused})`)
             yield* broadcastControl(agent.id)
-          })
+          }).pipe(controlLock.withPermits(1))
 
         // Whoever is driving already is visible to a viewer that joins now.
         yield* send(ws, controlState(agent.id))
@@ -326,6 +343,9 @@ export class TerminalWsServer extends Effect.Service<TerminalWsServer>()('Termin
                 live = session.right
                 yield* Effect.logInfo('terminal: live view on')
                 yield* send(ws, { _tag: 'browser', state: 'live' })
+                yield* Stream.runForEach(session.right.tabs, (tabs) => send(ws, tabs)).pipe(
+                  Effect.forkScoped
+                )
                 yield* Stream.runForEach(session.right.frames, (frame) => {
                   // Without a PTY the screencast is the only traffic there is; treating
                   // it as activity keeps a viewer watching an agent browse connected.
@@ -406,6 +426,8 @@ export class TerminalWsServer extends Effect.Service<TerminalWsServer>()('Termin
                 )
               case 'resize':
                 return pty?.resize(frame.right.cols, frame.right.rows) ?? Effect.void
+              case 'viewport':
+                return live?.resize(frame.right) ?? Effect.void
               case 'input': {
                 const session = live
                 const hold = controls.get(agent.id)

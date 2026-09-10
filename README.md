@@ -39,16 +39,22 @@ Other scripts: `pnpm typecheck` · `pnpm test` · `pnpm lint` · `pnpm build` (w
 server → `apps/server/dist/main.js`, which serves the built web client at `/`) ·
 `pnpm dev:desktop` (the Electron shell, see below).
 
-## Run it with Docker
+## Self-host
 
 ```sh
-echo "TAUT_MASTER_KEY=$(openssl rand -base64 32)" > .env   # keep it: lose the key, lose the vault
-docker compose up -d
+node scripts/self-host.mjs init ./self-hosted/my-company --port 3080
+node scripts/self-host.mjs up ./self-hosted/my-company
 ```
 
-One container, one volume (`/data`), one secret. Agents run in a second image
-(`taut/agent`) driven through the Docker socket. TLS, backups, upgrades and a from-zero VPS
-recipe are in [docs/deploy.md](docs/deploy.md).
+Open http://localhost:3080, create your account, then your company. Requires Node 22+, Docker
+and Compose v2. The installer builds server and agent images and generates private persistent
+configuration for each installation. See [self-hosting](docs/self-hosting.md) for verification
+status, HTTPS, calls, backups and upgrades; [cloud provisioning](docs/cloud-provisioning.md) for
+repeatable customer hosts; and [macOS releases](docs/macos-release.md) for DMG builds.
+
+For one trusted company, [Railway deployment](docs/railway.md) runs Taut and its agents in
+one service with persistent storage. The [template draft](https://railway.com/deploy/PyzQbM) exists; its public release source
+and first Railway deployment are still pending. See the guide for verification status.
 
 ## Desktop app
 
@@ -60,9 +66,9 @@ process opens its own `/ws?since=<lastSeq>` with the window's cookies and turns 
 events into OS notifications (click → the channel) and `unread.changed` into a dock badge.
 `pnpm dev:desktop` (with `pnpm dev` running) defaults to `http://localhost:5173` so the web app hot
 reloads inside the shell; a packaged build defaults to `http://localhost:3000`.
-`pnpm --filter @taut/desktop package` writes an unsigned `.app` — macOS refuses notifications to an
-unsigned bundle, so `codesign --force --deep --sign - dist/mac-arm64/Taut.app` (or a real Developer
-ID) before expecting banners.
+`pnpm --filter @taut/desktop package:mac --arch=arm64` (or `--arch=x64`) creates an unsigned
+DMG and ZIP under `apps/desktop/dist/unsigned`. The [release guide](docs/macos-release.md) covers
+Developer ID signing, notarization, checksums, and the macOS release workflow.
 
 ## Architecture in ten lines
 
@@ -89,7 +95,7 @@ ID) before expecting banners.
 | Subscriptions pool per runtime, rotation, cooldown    | works                     | `check` only detects the binary today; an invalid key is discovered on first run                                                                                                                                                                            |
 | Agents: create, mandate, skills, files, vault grants  | works                     | skills are editable in place (`GET …/skills/:name`); file upload into `inbox/`                                                                                                                                                                              |
 | @mention / DM → task → streamed reply (Claude Code)   | works                     | verified live with the host login; `local` machine provider                                                                                                                                                                                                 |
-| Docker machine provider                               | partial                   | provider + image exist and are tested opt-in; `mcp.js` not yet baked into the agent image                                                                                                                                                                   |
+| Docker machine provider                               | partial                   | server/agent images built; MCP server + CLI bundled; namespace isolation, API access and persistent homes verified with Docker                                                                                                                              |
 | Codex / Cursor / OpenCode runtimes                    | partial                   | commands and MCP configs are written, nothing beyond Claude Code was exercised                                                                                                                                                                              |
 | Agent-to-agent `ask` / `handoff`, department boundary | partial                   | same-department agents reach each other anywhere, in a shared channel or a DM of their own; cross-department is a hard block (`403 cross_department`, no gate) and lands in the head's `/handovers` queue to raise or dismiss; `ask` does not park the task |
 | Tasks page, cancel                                    | works                     | cancel interrupts the process                                                                                                                                                                                                                               |

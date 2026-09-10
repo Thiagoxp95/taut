@@ -32,6 +32,9 @@ RUN pnpm fetch
 # build — install offline from the warm store, then build server + web
 # ---------------------------------------------------------------------------
 FROM deps AS build
+# Native SQLite/PTY dependencies may need a source build on either server architecture.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
 COPY . .
 # apps/desktop (Electron) is excluded by the filter: nothing in the server image
 # needs it and its postinstall downloads a ~150 MB binary.

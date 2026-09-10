@@ -285,7 +285,7 @@ export function RoutineDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden sm:max-w-2xl">
+      <DialogContent className="flex max-h-[88dvh] flex-col overflow-hidden sm:max-w-2xl">
         {/* Keyed so a second Edit starts from that routine, not the last one's draft. */}
         <RoutineForm
           key={editing?.id ?? 'new'}

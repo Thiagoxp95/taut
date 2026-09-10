@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { createFileRoute, redirect } from '@tanstack/react-router'
-import { ArrowLeftIcon, HeadphonesIcon } from 'lucide-react'
+import { ArrowLeftIcon, HeadphonesIcon } from '@taut/ui/components/icons'
 import type { ChannelId, Me } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 

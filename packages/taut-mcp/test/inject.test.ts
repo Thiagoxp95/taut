@@ -10,7 +10,8 @@ import {
   cursorMcpJson,
   injectAll,
   opencodeJson,
-  opencodeToolNames
+  opencodeToolNames,
+  serverKeys
 } from '../src/inject.js'
 import { ToolNames } from '../src/tools.js'
 
@@ -37,8 +38,108 @@ const browser = {
   ]
 }
 const withBrowser = { ...o, extraServers: { browser } }
+const withRemote = {
+  ...withBrowser,
+  remoteServers: {
+    notion: { url: 'https://mcp.example.com/mcp', headers: { Authorization: 'Bearer test-token' } },
+    public: { url: 'https://public.example.com/mcp' }
+  }
+}
 
 describe('inject', () => {
+  it('mounts authenticated and public remote connectors in every runtime', () => {
+    const all = injectAll(withRemote)
+    expect(all.claude.config.mcpServers['notion']).toEqual({
+      type: 'http',
+      url: 'https://mcp.example.com/mcp',
+      headers: { Authorization: 'Bearer test-token' }
+    })
+    expect(all.claude.config.mcpServers['public']).toEqual({
+      type: 'http',
+      url: 'https://public.example.com/mcp'
+    })
+    expect(all.cursor.mcpJson.mcpServers['notion']).toEqual({
+      url: 'https://mcp.example.com/mcp',
+      headers: { Authorization: 'Bearer test-token' }
+    })
+    expect(all.cursor.mcpJson.mcpServers['public']).toEqual({
+      url: 'https://public.example.com/mcp'
+    })
+    expect(all.opencode.config.mcp['notion']).toEqual({
+      type: 'remote',
+      url: 'https://mcp.example.com/mcp',
+      headers: { Authorization: 'Bearer test-token' },
+      oauth: false,
+      enabled: true
+    })
+    expect(all.opencode.config.mcp['public']).toEqual({
+      type: 'remote',
+      url: 'https://public.example.com/mcp',
+      oauth: false,
+      enabled: true
+    })
+    expect(all.codex.configToml).toContain(
+      '[mcp_servers.notion]\nurl = "https://mcp.example.com/mcp"\nrequired = false'
+    )
+    expect(all.codex.configToml).toContain(
+      '[mcp_servers.notion.http_headers]\nAuthorization = "Bearer test-token"'
+    )
+    expect(all.codex.configToml).toContain(
+      '[mcp_servers.public]\nurl = "https://public.example.com/mcp"'
+    )
+    expect(all.codex.configToml).not.toContain('[mcp_servers.public.http_headers]')
+    expect(all.claude.config.mcpServers['browser']).toMatchObject({
+      type: 'stdio',
+      command: 'playwright-mcp'
+    })
+  })
+
+  it('grants remote connectors tool access and preserves built-in servers on name collisions', () => {
+    const options = {
+      ...withRemote,
+      remoteServers: {
+        ...withRemote.remoteServers,
+        taut: { url: 'https://wrong.example.com' },
+        browser: { url: 'https://wrong.example.com' }
+      }
+    }
+    const all = injectAll(options)
+    expect(serverKeys(options)).toEqual(['taut', 'browser', 'notion', 'public'])
+    expect(claudeAllowedToolsFor(options)).toEqual([
+      'mcp__browser__*',
+      'mcp__notion__*',
+      'mcp__public__*'
+    ])
+    expect(all.claude.allowedTools).toEqual([
+      'mcp__taut__*',
+      'mcp__browser__*',
+      'mcp__notion__*',
+      'mcp__public__*'
+    ])
+    expect(all.cursor.cliJson.permissions.allow).toEqual([
+      'Mcp(taut:*)',
+      'Mcp(browser:*)',
+      'Mcp(notion:*)',
+      'Mcp(public:*)'
+    ])
+    expect(all.claude.args('/m.json')).toContain('mcp__notion__*')
+    expect(all.claude.config.mcpServers.taut.command).toBe('node')
+    expect(all.claude.config.mcpServers['browser']).toMatchObject({ command: 'playwright-mcp' })
+    expect(JSON.stringify(all)).not.toContain('wrong.example.com')
+  })
+
+  it('quotes remote connector names and authentication header names and values in TOML', () => {
+    const options = {
+      ...o,
+      remoteServers: {
+        'custom.service': { url: 'https://example.com/mcp', headers: { 'X.Auth': 'a"b\\c' } }
+      }
+    }
+    const toml = codexConfigToml(options)
+    expect(toml).toContain('[mcp_servers."custom.service"]')
+    expect(toml).toContain('[mcp_servers."custom.service".http_headers]\n"X.Auth" = "a\\"b\\\\c"')
+  })
+
   it('claude: --mcp-config json + strict flags + allowedTools', () => {
     expect(claudeMcpConfig(o)).toEqual({
       mcpServers: { taut: { type: 'stdio', command: 'node', args: ['/opt/taut/mcp.js'], env } }
@@ -76,7 +177,7 @@ describe('inject', () => {
         taut: { command: 'evil', args: [] }
       }
     })
-    expect(local.mcpServers['browser']?.env).toEqual({ PLAYWRIGHT_BROWSERS_PATH: '/pw' })
+    expect(local.mcpServers['browser']).toMatchObject({ env: { PLAYWRIGHT_BROWSERS_PATH: '/pw' } })
     expect(local.mcpServers.taut.command).toBe('node')
   })
 

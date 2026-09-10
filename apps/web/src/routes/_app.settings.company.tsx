@@ -6,7 +6,7 @@ import {
   FolderGitIcon,
   SparklesIcon,
   TriangleAlertIcon
-} from 'lucide-react'
+} from '@taut/ui/components/icons'
 import { Badge } from '@taut/ui/components/badge'
 import { Button } from '@taut/ui/components/button'
 import { Input } from '@taut/ui/components/input'

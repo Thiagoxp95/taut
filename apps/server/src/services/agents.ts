@@ -1,7 +1,14 @@
 import { FileSystem } from '@effect/platform'
 import type { Multipart } from '@effect/platform'
 import { SqlClient } from '@effect/sql'
-import type { AgentDetail, CurrentUserShape, FileEntry, SkillCandidate } from '@taut/contract/api'
+import type {
+  AgentDetail,
+  ConnectorInput,
+  UpdateConnectorInput,
+  CurrentUserShape,
+  FileEntry,
+  SkillCandidate
+} from '@taut/contract/api'
 import {
   type Agent,
   type AgentFileGrant,
@@ -49,6 +56,7 @@ import {
 } from '../domain/rows.js'
 import { actor, isAdmin } from './access.js'
 import { makeAgentAccess } from './agentAccess.js'
+import { makeAgentConnectors } from './agentConnectors.js'
 import { Channels } from './channels.js'
 import { AgentHomes } from './homes.js'
 import { type Emit, EventPublisher } from './publisher.js'
@@ -69,6 +77,7 @@ export interface CreateAgentInput {
   readonly permissionMode: PermissionMode
   /** Headless browser inside the machine; `false` when absent. */
   readonly browserAccess?: boolean | undefined
+  readonly connectors?: ReadonlyArray<ConnectorInput> | undefined
   readonly departmentId?: DepartmentId | undefined
   /**
    * Repositories the agent may use from its first task
@@ -116,6 +125,7 @@ export class Agents extends Effect.Service<Agents>()('Agents', {
     const repositories = yield* Repositories
     const registry = yield* SkillRegistry
     const access = yield* makeAgentAccess
+    const connectors = yield* makeAgentConnectors
 
     // ── queries: agents ──────────────────────────────────────────────────────
 
@@ -567,17 +577,19 @@ export class Agents extends Effect.Service<Agents>()('Agents', {
       Effect.gen(function* () {
         const who = yield* actor(me)
         const row = yield* load(who.companyId, agentId)
-        const [skills, fileGrants, repoGrants] = yield* Effect.all([
+        const [skills, fileGrants, repoGrants, agentConnectors] = yield* Effect.all([
           // Pending included on purpose: the agent page is where a human approves one (D7).
           allSkillsOf(agentId),
           fileGrantsOf(agentId),
-          repositories.grantsOfAgent(agentId)
+          repositories.grantsOfAgent(agentId),
+          connectors.list(agentId)
         ])
         return {
           agent: yield* toAgentOne(row),
           skills: skills.map(toAgentSkill),
           fileGrants: fileGrants.map(toAgentFileGrant),
-          repoGrants
+          repoGrants,
+          connectors: agentConnectors
         }
       })
 
@@ -609,6 +621,7 @@ export class Agents extends Effect.Service<Agents>()('Agents', {
           return yield* new Conflict({ reason: `Agent handle "${input.handle}" is taken` })
         }
         yield* validatePinned(who.companyId, input.runtimeKind, input.pinnedSubscriptionId ?? null)
+        yield* Effect.forEach(input.connectors ?? [], connectors.validate)
 
         const id = newAgentId()
         const home = yield* homes.homeOf(who.companyId, input.handle)
@@ -655,6 +668,9 @@ export class Agents extends Effect.Service<Agents>()('Agents', {
             // than the form said it would.
             for (const grant of input.repoGrants ?? []) {
               yield* repositories.grantInternal(who.companyId, id, grant.repositoryId, grant.mode)
+            }
+            for (const connector of input.connectors ?? []) {
+              yield* connectors.add(who.companyId, id, connector)
             }
             const agent = yield* loadPublic(who.companyId, id)
             yield* emit({ type: 'agent.created', payload: { agent } })
@@ -1426,7 +1442,79 @@ export class Agents extends Effect.Service<Agents>()('Agents', {
       get,
       create,
       update: patch,
+      /** Internal approval seam. The caller holds the transaction and has verified the human. */
+      applyApprovedMandate: (
+        emit: Emit,
+        companyId: CompanyId,
+        agentId: AgentId,
+        previous: string,
+        mandate: string
+      ) =>
+        Effect.gen(function* () {
+          const row = yield* load(companyId, agentId)
+          if (row.archived_at !== null || row.mandate !== previous) return false
+          yield* sql`UPDATE agents SET mandate = ${mandate}, updated_at = ${nowIso()} WHERE company_id = ${companyId} AND id = ${agentId}`.pipe(
+            Effect.orDie
+          )
+          yield* homes.writeAgentMd(yield* homeOfRow(row), {
+            name: row.name,
+            handle: row.handle,
+            role: row.role,
+            mandate
+          })
+          yield* clearSessions(agentId)
+          const agent = yield* loadPublic(companyId, agentId)
+          yield* emit({ type: 'agent.updated', payload: { agent } })
+          return true
+        }),
       delete: del,
+      addConnector: (me: CurrentUserShape, agentId: AgentId, input: ConnectorInput) =>
+        Effect.gen(function* () {
+          const who = yield* actor(me)
+          yield* load(who.companyId, agentId)
+          yield* requireManage(who, agentId)
+          return yield* publisher.transact(who.companyId, (emit) =>
+            Effect.gen(function* () {
+              const connector = yield* connectors.add(who.companyId, agentId, input)
+              yield* clearSessions(agentId)
+              yield* emitUpdated(emit, who.companyId, agentId)
+              return connector
+            })
+          )
+        }),
+      updateConnector: (
+        me: CurrentUserShape,
+        agentId: AgentId,
+        connectorId: string,
+        input: UpdateConnectorInput
+      ) =>
+        Effect.gen(function* () {
+          const who = yield* actor(me)
+          yield* load(who.companyId, agentId)
+          yield* requireManage(who, agentId)
+          return yield* publisher.transact(who.companyId, (emit) =>
+            Effect.gen(function* () {
+              const connector = yield* connectors.update(who.companyId, agentId, connectorId, input)
+              yield* clearSessions(agentId)
+              yield* emitUpdated(emit, who.companyId, agentId)
+              return connector
+            })
+          )
+        }),
+      removeConnector: (me: CurrentUserShape, agentId: AgentId, connectorId: string) =>
+        Effect.gen(function* () {
+          const who = yield* actor(me)
+          yield* load(who.companyId, agentId)
+          yield* requireManage(who, agentId)
+          yield* publisher.transact(who.companyId, (emit) =>
+            Effect.gen(function* () {
+              yield* connectors.remove(agentId, connectorId)
+              yield* clearSessions(agentId)
+              yield* emitUpdated(emit, who.companyId, agentId)
+            })
+          )
+        }),
+      connectorsForRuntime: connectors.forRuntime,
       getSkill,
       putSkill,
       deleteSkill: removeSkill,

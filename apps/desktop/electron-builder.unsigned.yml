@@ -1,0 +1,9 @@
+extends: ./electron-builder.yml
+directories:
+  output: dist/unsigned
+mac:
+  identity: null
+  notarize: false
+  artifactName: Taut-${version}-mac-${arch}-unsigned.${ext}
+dmg:
+  artifactName: Taut-${version}-mac-${arch}-unsigned.${ext}

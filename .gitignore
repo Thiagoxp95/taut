@@ -31,3 +31,6 @@ data/
 *.db-shm
 *.db-wal
 master.key
+
+# Generated private self-host installations
+self-hosted/

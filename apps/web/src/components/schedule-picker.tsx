@@ -6,7 +6,7 @@
  * the same `nextRuns` the server fires on, so what a human approves here is what happens.
  */
 import * as React from 'react'
-import { PlusIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
+import { PlusIcon, TriangleAlertIcon, XIcon } from '@taut/ui/components/icons'
 import {
   describeSchedule,
   nextRuns,
@@ -355,7 +355,11 @@ function WeeklyBody({
 
   return (
     <div className="grid gap-2">
-      <div className="flex gap-1.5" role="group" aria-label="Days of the week">
+      <div
+        className="grid w-full max-w-72 grid-cols-7 gap-1 [&>button]:min-w-0 [&>button]:w-full"
+        role="group"
+        aria-label="Days of the week"
+      >
         {WEEKDAY_LETTERS.map((letter, day) => (
           <Chip
             key={day}
@@ -431,7 +435,11 @@ function MonthlyBody({
           Clear
         </Button>
       </div>
-      <div className="grid w-fit grid-cols-7 gap-1.5" role="group" aria-label="Days of the month">
+      <div
+        className="grid w-full max-w-72 grid-cols-7 gap-1 [&>button]:min-w-0 [&>button]:w-full"
+        role="group"
+        aria-label="Days of the month"
+      >
         {MONTH_DAYS.map((day) => (
           <Chip
             key={day}
@@ -604,9 +612,9 @@ export function SchedulePicker({
           onChange(drafts.current[next as Mode] ?? blankSchedule(next as Mode, value, timezone))
         }
       >
-        <TabsList className="w-full">
+        <TabsList className="grid h-auto w-full grid-cols-3 gap-1 sm:grid-cols-5">
           {MODES.map((entry) => (
-            <TabsTrigger key={entry.mode} value={entry.mode}>
+            <TabsTrigger key={entry.mode} value={entry.mode} className="h-8 text-xs">
               {entry.label}
             </TabsTrigger>
           ))}

@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { CircleSlashIcon, HashIcon, ListChecksIcon } from 'lucide-react'
+import { CircleSlashIcon, HashIcon, ListChecksIcon } from '@taut/ui/components/icons'
 import type { Task, TaskStatus } from '@taut/contract'
 
 import { Button } from '@taut/ui/components/button'
@@ -71,6 +71,7 @@ function TaskRow({ task, now }: { task: Task; now: number }) {
       <td className="px-4 py-3">
         <div className="flex items-center gap-2.5">
           <EntityAvatar
+            memberId={agent?.id}
             avatar={agent?.avatar ?? { kind: 'emoji', value: '🤖' }}
             kind="agent"
             face={agent?.face}

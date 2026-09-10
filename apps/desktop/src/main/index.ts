@@ -1,8 +1,18 @@
-import { BrowserWindow, app, ipcMain, session } from 'electron'
+import {
+  BrowserWindow,
+  app,
+  dialog,
+  ipcMain,
+  session,
+  type IpcMainInvokeEvent,
+  type IpcMainEvent
+} from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { Effect, Either, Layer, LogLevel, Logger, ManagedRuntime } from 'effect'
 import { join } from 'node:path'
 
+import { signInToClaude } from './claude-login'
+import { serveClaudeBrowserLogin } from './claude-browser-login'
 import { closeHuddle, openHuddle } from './huddle'
 import { normalizeInstanceUrl, probeInstance } from './instance'
 import { installMenu } from './menu'
@@ -59,6 +69,60 @@ let pendingPath: string | undefined
  */
 let currentInstanceUrl: string | undefined
 
+let claudeController: AbortController | undefined
+let claudeTask: ReturnType<typeof signInToClaude> | undefined
+let browserLogin: Awaited<ReturnType<typeof serveClaudeBrowserLogin>> | undefined
+let pendingClaudeLink: string | undefined
+
+const cancelClaudeLogin = (): void => {
+  claudeController?.abort()
+  browserLogin?.cancel()
+  browserLogin = undefined
+}
+
+const runClaudeLogin = async (signal?: AbortSignal) => {
+  if (claudeController) throw new Error('A Claude sign-in is already open.')
+  const controller = new AbortController()
+  claudeController = controller
+  const task = signInToClaude({
+    signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
+  })
+  claudeTask = task
+  try {
+    return await task
+  } finally {
+    if (claudeController === controller) claudeController = undefined
+    if (claudeTask === task) claudeTask = undefined
+  }
+}
+
+const beginBrowserClaudeLogin = async (raw: string): Promise<void> => {
+  const url = new URL(raw)
+  const origin = url.searchParams.get('origin')
+  const nonce = url.searchParams.get('nonce')
+  if (
+    !currentInstanceUrl ||
+    origin !== new URL(currentInstanceUrl).origin ||
+    !nonce ||
+    !/^[a-f0-9]{64}$/.test(nonce)
+  ) {
+    throw new Error(
+      'Open the same workspace in Taut desktop before connecting Claude from your browser.'
+    )
+  }
+  if (browserLogin || claudeController)
+    throw new Error('A Claude sign-in is already open. Finish or cancel it first.')
+  const broker = await serveClaudeBrowserLogin({
+    origin,
+    nonce,
+    signIn: ({ signal }) => runClaudeLogin(signal)
+  })
+  browserLogin = broker
+  void broker.finished.then(() => {
+    if (browserLogin === broker) browserLogin = undefined
+  })
+}
+
 const devOrigins = rendererDevUrl === undefined ? [] : [new URL(rendererDevUrl).origin]
 
 const replaceWindow = (next: Mode): BrowserWindow => {
@@ -73,6 +137,7 @@ const replaceWindow = (next: Mode): BrowserWindow => {
 }
 
 const openSetup = (): void => {
+  cancelClaudeLogin()
   setAllowedOrigins(devOrigins)
   runtime.runFork(Effect.flatMap(Realtime, (realtime) => realtime.stop))
   setBadgeCount(0)
@@ -93,7 +158,10 @@ const openInstance = (instanceUrl: string): void => {
   setAllowedOrigins([instanceUrl, ...devOrigins])
   currentInstanceUrl = instanceUrl
   const window = replaceWindow('instance')
-  if (switched) closeHuddle()
+  if (switched) {
+    closeHuddle()
+    cancelClaudeLogin()
+  }
   void window.loadURL(instanceUrl)
   window.webContents.once('did-finish-load', () => {
     if (pendingPath === undefined) return
@@ -131,6 +199,19 @@ const open = (path: string): void => {
 /** `taut://c/chn_1?thread=msg_2` → `/c/chn_1?thread=msg_2`. */
 const handleDeepLink = (raw: string): void => {
   if (!raw.startsWith(`${PROTOCOL}://`)) return
+  if (raw.startsWith('taut://connect/claude?')) {
+    if (!app.isReady() || currentInstanceUrl === undefined) {
+      pendingClaudeLink = raw
+      return
+    }
+    void beginBrowserClaudeLogin(raw).catch((error) =>
+      dialog.showErrorBox(
+        'Could not connect Claude',
+        error instanceof Error ? error.message : 'Try again.'
+      )
+    )
+    return
+  }
   const rest = raw.slice(`${PROTOCOL}://`.length)
   open(`/${rest.replace(/^\/+/, '')}`)
 }
@@ -160,6 +241,22 @@ const registerIpc = (): void => {
   // the web app's first line runs.
   ipcMain.on('taut:info', (event) => {
     event.returnValue = { version: app.getVersion(), platform: process.platform }
+  })
+
+  const trustedMainFrame = (event: IpcMainInvokeEvent | IpcMainEvent): boolean =>
+    currentInstanceUrl !== undefined &&
+    mainWindow !== null &&
+    event.sender === mainWindow.webContents &&
+    event.senderFrame === event.sender.mainFrame &&
+    new URL(event.senderFrame.url).origin === new URL(currentInstanceUrl).origin
+
+  ipcMain.handle('taut:claude:connect', (event) => {
+    if (!trustedMainFrame(event) || browserLogin)
+      throw new Error('Claude sign-in is unavailable here.')
+    return runClaudeLogin()
+  })
+  ipcMain.on('taut:claude:cancel', (event) => {
+    if (trustedMainFrame(event)) claudeController?.abort()
   })
 
   ipcMain.handle('taut:setup:state', () =>
@@ -242,9 +339,20 @@ if (!singleInstance) {
 
     runtime.runFork(Effect.flatMap(Realtime, (realtime) => runNotifier(realtime.events, { open })))
 
+    // A development launch must use the live web client, even when an earlier
+    // packaged/Docker session saved a different instance in this Electron profile.
+    if (is.dev) {
+      await runtime.runPromise(
+        Effect.flatMap(Store, (store) => store.setInstanceUrl(DEFAULT_INSTANCE_URL))
+      )
+    }
     const stored = await runtime.runPromise(Effect.flatMap(Store, (store) => store.instanceUrl))
     if (stored._tag === 'Some') openInstance(stored.value)
     else openSetup()
+    const authLink =
+      pendingClaudeLink ?? process.argv.find((arg) => arg.startsWith('taut://connect/claude?'))
+    pendingClaudeLink = undefined
+    if (authLink && currentInstanceUrl) handleDeepLink(authLink)
 
     // macOS: the dock icon reopens whichever screen the shell is configured for. A huddle window
     // does not count as the app being up (D13) — with the main window closed and a call running,
@@ -263,7 +371,15 @@ if (!singleInstance) {
     if (process.platform !== 'darwin') app.quit()
   })
 
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
+    if (claudeTask) {
+      event.preventDefault()
+      const task = claudeTask
+      cancelClaudeLogin()
+      void task.catch(() => {}).then(() => app.quit())
+      return
+    }
+    cancelClaudeLogin()
     // Close rather than let the quit tear it down, so the renderer's unload handler still runs
     // and LiveKit gets its disconnect (D13).
     closeHuddle()

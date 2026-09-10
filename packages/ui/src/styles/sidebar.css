@@ -1,0 +1,149 @@
+/* One cadence for the rail, disclosures, and labels. Width/grid motion is limited
+ * to this short, user-triggered transition; text and icons use opacity/transform. */
+[data-slot='sidebar'] {
+  --sidebar-motion-duration: 300ms;
+  --sidebar-motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-slot='sidebar-content'] {
+  overflow-anchor: none;
+}
+
+[data-slot='sidebar-sub-disclosure'] {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows var(--sidebar-motion-duration) var(--sidebar-motion-ease),
+    opacity 160ms ease-out;
+}
+
+[data-slot='sidebar-sub-clip'] {
+  min-height: 0;
+  overflow: hidden;
+}
+
+[data-slot='sidebar'][data-collapsible='icon'] [data-slot='sidebar-sub-disclosure'] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+[data-slot='sidebar'][data-state] [data-sidebar='menu-button'] > :not(:first-child),
+[data-slot='sidebar-group-label-text'],
+.taut-sidebar-connection {
+  transition:
+    opacity 160ms ease-out,
+    transform 200ms var(--sidebar-motion-ease),
+    visibility 0s;
+}
+
+[data-slot='sidebar'][data-state='expanded'] [data-sidebar='menu-button'] > :not(:first-child),
+[data-slot='sidebar'][data-state='expanded'] [data-slot='sidebar-group-label-text'] {
+  transition-delay: 60ms, 60ms, 0s;
+}
+
+[data-slot='sidebar'][data-collapsible='icon'] [data-sidebar='menu-button'] > :not(:first-child),
+[data-slot='sidebar'][data-collapsible='icon'] [data-slot='sidebar-group-label-text'],
+[data-slot='sidebar'][data-collapsible='icon'] .taut-sidebar-connection {
+  opacity: 0;
+  transform: translateX(-4px);
+}
+
+/* Leave labels accessible as button names; only non-interactive section copy
+ * becomes invisible. Retaining the heading slot prevents section spacing jumps. */
+[data-slot='sidebar'][data-collapsible='icon'] [data-slot='sidebar-group-label-text'],
+[data-slot='sidebar'][data-collapsible='icon'] .taut-sidebar-connection {
+  visibility: hidden;
+  transition-delay: 0s, 0s, 160ms;
+}
+
+[data-slot='sidebar-group-label'] {
+  position: relative;
+  white-space: nowrap;
+}
+
+[data-slot='sidebar-group-label']::after {
+  position: absolute;
+  right: 8px;
+  left: 8px;
+  height: 1px;
+  background: var(--sidebar-border);
+  content: '';
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+}
+
+[data-slot='sidebar'][data-collapsible='icon'] [data-slot='sidebar-group-label']::after {
+  opacity: 1;
+}
+
+.taut-sidebar-connection {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Reserve the compact controls' full height in normal flow. The desktop shell
+ * adds title-bar padding to the header, so fixing its outer height clips them. */
+.taut-sidebar-header {
+  flex-shrink: 0;
+}
+
+.taut-sidebar-header [data-sidebar='menu-item'] {
+  /* 40px company button + 6px gap + 28px toggle. */
+  min-height: 74px;
+}
+
+/* Radix asChild triggers replace data-slot; data-sidebar survives composition. */
+
+.taut-sidebar-header [data-sidebar='menu-button'] {
+  width: calc(100% - 32px);
+  min-width: 32px;
+  height: 40px;
+}
+
+.taut-sidebar-toggle {
+  position: absolute;
+  top: 6px;
+  right: 0;
+  transition: transform var(--sidebar-motion-duration) var(--sidebar-motion-ease);
+}
+
+[data-slot='sidebar'][data-collapsible='icon'] .taut-sidebar-toggle {
+  transform: translate(-4px, 40px);
+}
+
+.taut-sidebar-disclosure-icon {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.taut-sidebar-disclosure-icon > svg {
+  position: absolute;
+  inset: 0;
+  width: 16px;
+  height: 16px;
+  transition:
+    opacity 160ms ease-out,
+    transform var(--sidebar-motion-duration) var(--sidebar-motion-ease);
+}
+
+.taut-sidebar-folder {
+  opacity: 0;
+}
+
+[data-slot='sidebar'][data-collapsible='icon'] .taut-sidebar-chevron {
+  opacity: 0;
+}
+
+[data-slot='sidebar'][data-collapsible='icon'] .taut-sidebar-folder {
+  opacity: 0.7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot='sidebar'] *,
+  [data-slot='sidebar'] *::after {
+    transition: none !important;
+  }
+}

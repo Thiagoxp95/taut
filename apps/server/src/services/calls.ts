@@ -316,6 +316,14 @@ export class Calls extends Effect.Service<Calls>()('Calls', {
         if (livekit === undefined) return yield* disabled()
         const channel = yield* channels.load(who, channelId)
         yield* channels.requireView(who, channel)
+        if (channel.kind === 'dm') {
+          const agents = yield* channels.agentMembers(channel.id)
+          if (agents.length > 0) {
+            return yield* new Validation({
+              issues: [{ path: ['channelId'], message: 'Huddles are not available in agent DMs' }]
+            })
+          }
+        }
         // A session is always a person; `member` is the seam agents will come through (D5).
         const member = { kind: 'user' as MemberKind, id: who.userId as MemberId }
         yield* requireHuman(member.kind)

@@ -26,6 +26,46 @@ const load = (entries: Record<string, string>) =>
   )
 
 describe('AppConfig', () => {
+  it.effect('keeps browser and agent API URLs separate', () =>
+    Effect.gen(function* () {
+      const config = yield* load({
+        TAUT_DATA_DIR: fresh(),
+        TAUT_MASTER_KEY: TEST_MASTER_KEY,
+        TAUT_PUBLIC_URL: 'https://taut.example.com',
+        TAUT_AGENT_API_URL: 'http://taut-api:3000'
+      })
+      expect(config.publicUrl).toBe('https://taut.example.com')
+      expect(config.agentApiUrl).toBe('http://taut-api:3000')
+    })
+  )
+
+  it.effect('accepts a stable instance slug and rejects unsafe or ambiguous namespaces', () =>
+    Effect.gen(function* () {
+      const base = { TAUT_DATA_DIR: fresh(), TAUT_MASTER_KEY: TEST_MASTER_KEY }
+      const config = yield* load({
+        ...base,
+        TAUT_INSTANCE_ID: 'customer-42',
+        TAUT_DOCKER_NETWORK: 'customer-42-api'
+      })
+      expect(config.instanceId).toBe('customer-42')
+      expect(config.dockerNetwork).toBe('customer-42-api')
+      for (const value of [
+        '',
+        'Customer',
+        '../other',
+        'with space',
+        '-leading',
+        'trailing-',
+        'two--parts',
+        'a'.repeat(64)
+      ]) {
+        const failure = yield* Effect.flip(load({ ...base, TAUT_INSTANCE_ID: value }))
+        expect(ConfigError.isConfigError(failure)).toBe(true)
+        expect(String(failure)).toContain('TAUT_INSTANCE_ID')
+      }
+    })
+  )
+
   it.effect('applies defaults and decodes TAUT_MASTER_KEY', () =>
     Effect.gen(function* () {
       const dir = fresh()
@@ -34,6 +74,8 @@ describe('AppConfig', () => {
       expect(config.dataDir).toBe(dir)
       expect(config.cookieSecure).toBe(false)
       expect(config.production).toBe(false)
+      expect(config.instanceId).toBeUndefined()
+      expect(config.agentApiUrl).toBeUndefined()
       expect(Buffer.from(Redacted.value(config.masterKey))).toEqual(
         Buffer.from(TEST_MASTER_KEY_BYTES)
       )

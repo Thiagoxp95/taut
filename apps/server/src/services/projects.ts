@@ -1,16 +1,30 @@
 import { SqlClient } from '@effect/sql'
-import type { CurrentUserShape } from '@taut/contract/api'
-import { ProjectDetail } from '@taut/contract/domain'
+import type { CreateIssuePayload, CurrentUserShape, UpdateIssuePayload } from '@taut/contract/api'
+import {
+  IssueActivity,
+  IssueDetail,
+  IssueHistoryEvent,
+  IssueHistoryKind,
+  IssueLinearComment,
+  IssueOptions,
+  IssueState,
+  IssueStateType,
+  ProjectDetail
+} from '@taut/contract/domain'
 import type {
   LinearConnection,
   LinearUser,
+  Message,
   Project,
   ProjectIssue,
   ProjectMilestone
 } from '@taut/contract/domain'
 import { Forbidden, NotFound, type Unauthorized, Validation } from '@taut/contract/errors'
 import {
+  AgentId,
+  ChannelId,
   type CompanyId,
+  MessageId,
   ProjectId,
   type UserId,
   newProjectId,
@@ -31,14 +45,26 @@ import {
   toProjectMilestone
 } from '../domain/rows.js'
 import { type Actor, actor, requireAdmin } from './access.js'
+import { Channels } from './channels.js'
 import {
   type LinearFailure,
   Linear,
   type LinearIssue,
+  type LinearIssueUpdate,
   type LinearProject,
   type LinearWorkspaceUser
 } from './linear.js'
+import { Messages } from './messages.js'
 import { EventPublisher } from './publisher.js'
+
+/**
+ * The two payloads this service takes from the wire (docs/build-plan-issues.md).
+ * Named locally so the methods below read as the plan words them, and so that the
+ * MCP path (D18) hands over exactly the same shape a browser does — an agent
+ * cannot do anything a human in the UI cannot.
+ */
+type UpdateIssuePayloadShape = typeof UpdateIssuePayload.Type
+type CreateIssuePayloadShape = typeof CreateIssuePayload.Type
 
 /**
  * The milestone a board card names (D14). Linear shows the one it is working
@@ -65,11 +91,22 @@ const COLUMNS =
 const MILESTONE_COLUMNS =
   'id, project_id, linear_id, name, description, target_date, status, sort_order'
 
+/**
+ * Every column of a ticket (docs/build-plan-issues.md D6), qualified with `i.`
+ * because every read of one issue now joins `projects` to scope it to the actor's
+ * company — an identifier is a company-wide name, so resolving one without that
+ * join would hand a reader somebody else's ticket (D15).
+ */
 const ISSUE_COLUMNS =
-  'id, project_id, linear_id, identifier, title, ' +
-  'state_id, state_name, state_type, state_color, state_position, ' +
-  'priority, priority_label, assignee_id, assignee_name, assignee_avatar, ' +
-  'labels, milestone_name, due_date, url, sort_order, created_at, updated_at, synced_at'
+  'i.id, i.project_id, i.linear_id, i.identifier, i.title, i.description, ' +
+  'i.state_id, i.state_name, i.state_type, i.state_color, i.state_position, ' +
+  'i.priority, i.priority_label, i.assignee_id, i.assignee_name, i.assignee_avatar, ' +
+  'i.creator_id, i.creator_name, i.creator_avatar, ' +
+  'i.labels, i.team_id, i.team_key, i.milestone_name, i.milestone_id, ' +
+  'i.due_date, i.estimate, ' +
+  'i.parent_linear_id, i.parent_identifier, i.parent_title, i.sub_issue_count, ' +
+  'i.url, i.sort_order, i.created_at, i.updated_at, i.completed_at, i.canceled_at, ' +
+  'i.synced_at, i.thread_message_id'
 
 const LINEAR_USER_COLUMNS =
   'company_id, linear_id, name, display_name, email, avatar_url, active, user_id, ' +
@@ -146,9 +183,87 @@ export class Projects extends Effect.Service<Projects>()('Projects', {
       Request: ProjectId,
       Result: ProjectIssueRow,
       execute: (projectId) => sql`
-        SELECT ${sql.literal(ISSUE_COLUMNS)} FROM project_issues
-        WHERE project_id = ${projectId}
-        ORDER BY state_position ASC, sort_order ASC, identifier ASC`
+        SELECT ${sql.literal(ISSUE_COLUMNS)} FROM project_issues i
+        WHERE i.project_id = ${projectId}
+        ORDER BY i.state_position ASC, i.sort_order ASC, i.identifier ASC`
+    })
+
+    // ── one ticket (docs/build-plan-issues.md) ───────────────────────────────
+
+    /**
+     * By Taut's own id, scoped to the company through the project it hangs under
+     * (D15). The join is the scope: `project_issues` has no `company_id` of its
+     * own, and a ticket is exactly as private as its project.
+     */
+    const issueById = findOne({
+      Request: Schema.Struct({ companyId: Schema.String, issueId: Schema.String }),
+      Result: ProjectIssueRow,
+      execute: (r) => sql`
+        SELECT ${sql.literal(ISSUE_COLUMNS)} FROM project_issues i
+        JOIN projects p ON p.id = i.project_id
+        WHERE p.company_id = ${r.companyId} AND i.id = ${r.issueId}`
+    })
+
+    /**
+     * By the identifier a human quotes (D15), case-insensitively — `eng-4636`
+     * pasted out of a chat message has to resolve to `ENG-4636`. `LIMIT 1` because
+     * a workspace could in principle mirror the same identifier twice mid-rename,
+     * and answering with an arbitrary one of them beats failing the page.
+     */
+    const issueByIdentifier = findOne({
+      Request: Schema.Struct({ companyId: Schema.String, identifier: Schema.String }),
+      Result: ProjectIssueRow,
+      execute: (r) => sql`
+        SELECT ${sql.literal(ISSUE_COLUMNS)} FROM project_issues i
+        JOIN projects p ON p.id = i.project_id
+        WHERE p.company_id = ${r.companyId} AND i.identifier = ${r.identifier} COLLATE NOCASE
+        LIMIT 1`
+    })
+
+    /**
+     * The ticket a thread belongs to (D8, D17). One indexed read on
+     * `thread_message_id`, and it answers nothing for every ordinary thread —
+     * which is what makes it cheap enough for the task runner to ask on every
+     * single wake.
+     */
+    const issueByThread = findOne({
+      Request: Schema.Struct({ companyId: Schema.String, threadId: Schema.String }),
+      Result: ProjectIssueRow,
+      execute: (r) => sql`
+        SELECT ${sql.literal(ISSUE_COLUMNS)} FROM project_issues i
+        JOIN projects p ON p.id = i.project_id
+        WHERE p.company_id = ${r.companyId} AND i.thread_message_id = ${r.threadId}`
+    })
+
+    /** The tickets filed under this one (D16), in the order a column reads. */
+    const subIssuesOf = findAll({
+      Request: Schema.Struct({ companyId: Schema.String, parentLinearId: Schema.String }),
+      Result: ProjectIssueRow,
+      execute: (r) => sql`
+        SELECT ${sql.literal(ISSUE_COLUMNS)} FROM project_issues i
+        JOIN projects p ON p.id = i.project_id
+        WHERE p.company_id = ${r.companyId} AND i.parent_linear_id = ${r.parentLinearId}
+        ORDER BY i.state_position ASC, i.sort_order ASC, i.identifier ASC`
+    })
+
+    /**
+     * The channel one message is in (D22). Its own statement rather than a
+     * `Messages` dependency, for the reason `authorHandle` is: this service is
+     * built a tier below `Messages`, and one column is a smaller price than moving
+     * the whole mirror up the layer graph.
+     */
+    const channelOfMessage = findOne({
+      Request: Schema.String,
+      Result: Schema.Struct({ channel_id: ChannelId }),
+      execute: (messageId) => sql`SELECT channel_id FROM messages WHERE id = ${messageId}`
+    })
+
+    /** Where a ticket lands when Linear says it moved to another project (D2). */
+    const projectByLinearId = findOne({
+      Request: Schema.Struct({ companyId: Schema.String, linearId: Schema.String }),
+      Result: Schema.Struct({ id: ProjectId }),
+      execute: (r) => sql`
+        SELECT id FROM projects WHERE company_id = ${r.companyId} AND linear_id = ${r.linearId}`
     })
 
     /** Every status id this company's mirror knows — the board's own vocabulary (D13). */
@@ -282,43 +397,180 @@ export class Projects extends Effect.Service<Projects>()('Projects', {
       execute: (projectId) => sql`DELETE FROM project_issues WHERE project_id = ${projectId}`
     })
 
+    /**
+     * Everything a ticket is, as one row (docs/build-plan-issues.md D6). Shared by
+     * the insert and the write-through update, so that the two can never disagree
+     * about what a mirrored issue holds.
+     */
+    const IssueWrite = Schema.Struct({
+      id: Schema.String,
+      projectId: ProjectId,
+      linearId: Schema.String,
+      identifier: Schema.String,
+      title: Schema.String,
+      description: Schema.NullOr(Schema.String),
+      stateId: Schema.String,
+      stateName: Schema.String,
+      stateType: Schema.String,
+      stateColor: Schema.NullOr(Schema.String),
+      statePosition: Schema.Number,
+      priority: Schema.Number,
+      priorityLabel: Schema.NullOr(Schema.String),
+      assigneeId: Schema.NullOr(Schema.String),
+      assigneeName: Schema.NullOr(Schema.String),
+      assigneeAvatar: Schema.NullOr(Schema.String),
+      creatorId: Schema.NullOr(Schema.String),
+      creatorName: Schema.NullOr(Schema.String),
+      creatorAvatar: Schema.NullOr(Schema.String),
+      labels: Schema.String,
+      teamId: Schema.NullOr(Schema.String),
+      teamKey: Schema.NullOr(Schema.String),
+      milestoneName: Schema.NullOr(Schema.String),
+      milestoneId: Schema.NullOr(Schema.String),
+      dueDate: Schema.NullOr(Schema.String),
+      estimate: Schema.NullOr(Schema.Number),
+      parentLinearId: Schema.NullOr(Schema.String),
+      parentIdentifier: Schema.NullOr(Schema.String),
+      parentTitle: Schema.NullOr(Schema.String),
+      subIssueCount: Schema.Number,
+      url: Schema.String,
+      sortOrder: Schema.Number,
+      createdAt: Schema.NullOr(Schema.String),
+      updatedAt: Schema.NullOr(Schema.String),
+      completedAt: Schema.NullOr(Schema.String),
+      canceledAt: Schema.NullOr(Schema.String),
+      syncedAt: Schema.String
+    })
+
     const insertIssue = run({
+      Request: IssueWrite,
+      execute: (r) => sql`
+        INSERT INTO project_issues
+          (id, project_id, linear_id, identifier, title, description,
+           state_id, state_name, state_type, state_color, state_position,
+           priority, priority_label, assignee_id, assignee_name, assignee_avatar,
+           creator_id, creator_name, creator_avatar,
+           labels, team_id, team_key, milestone_name, milestone_id, due_date, estimate,
+           parent_linear_id, parent_identifier, parent_title, sub_issue_count,
+           url, sort_order, created_at, updated_at, completed_at, canceled_at, synced_at)
+        VALUES (${r.id}, ${r.projectId}, ${r.linearId}, ${r.identifier}, ${r.title},
+                ${r.description},
+                ${r.stateId}, ${r.stateName}, ${r.stateType}, ${r.stateColor}, ${r.statePosition},
+                ${r.priority}, ${r.priorityLabel}, ${r.assigneeId}, ${r.assigneeName},
+                ${r.assigneeAvatar}, ${r.creatorId}, ${r.creatorName}, ${r.creatorAvatar},
+                ${r.labels}, ${r.teamId}, ${r.teamKey}, ${r.milestoneName}, ${r.milestoneId},
+                ${r.dueDate}, ${r.estimate},
+                ${r.parentLinearId}, ${r.parentIdentifier}, ${r.parentTitle}, ${r.subIssueCount},
+                ${r.url}, ${r.sortOrder}, ${r.createdAt}, ${r.updatedAt}, ${r.completedAt},
+                ${r.canceledAt}, ${r.syncedAt})`
+    })
+
+    /**
+     * D2: rewrite one row from the issue Linear answered with. By `id`, never by
+     * `(project_id, linear_id)`, because the page's URL is that id and a ticket
+     * moved to another project must keep it — the row changes project, not
+     * identity. `thread_message_id` is untouched here on purpose: it is the one
+     * column Linear knows nothing about (D8).
+     */
+    const updateIssueRow = run({
+      Request: IssueWrite,
+      execute: (r) => sql`
+        UPDATE project_issues SET
+          project_id = ${r.projectId}, linear_id = ${r.linearId},
+          identifier = ${r.identifier}, title = ${r.title}, description = ${r.description},
+          state_id = ${r.stateId}, state_name = ${r.stateName}, state_type = ${r.stateType},
+          state_color = ${r.stateColor}, state_position = ${r.statePosition},
+          priority = ${r.priority}, priority_label = ${r.priorityLabel},
+          assignee_id = ${r.assigneeId}, assignee_name = ${r.assigneeName},
+          assignee_avatar = ${r.assigneeAvatar},
+          creator_id = ${r.creatorId}, creator_name = ${r.creatorName},
+          creator_avatar = ${r.creatorAvatar},
+          labels = ${r.labels}, team_id = ${r.teamId}, team_key = ${r.teamKey},
+          milestone_name = ${r.milestoneName}, milestone_id = ${r.milestoneId},
+          due_date = ${r.dueDate}, estimate = ${r.estimate},
+          parent_linear_id = ${r.parentLinearId}, parent_identifier = ${r.parentIdentifier},
+          parent_title = ${r.parentTitle}, sub_issue_count = ${r.subIssueCount},
+          url = ${r.url}, sort_order = ${r.sortOrder},
+          created_at = ${r.createdAt}, updated_at = ${r.updatedAt},
+          completed_at = ${r.completedAt}, canceled_at = ${r.canceledAt},
+          synced_at = ${r.syncedAt}
+        WHERE id = ${r.id}`
+    })
+
+    /** D5: the row goes, the thread stays — nothing here touches `messages`. */
+    const deleteIssueRow = run({
+      Request: Schema.String,
+      execute: (issueId) => sql`DELETE FROM project_issues WHERE id = ${issueId}`
+    })
+
+    /** D8: the one column Taut owns, written once when the first message is said. */
+    const setThreadMessage = run({
+      Request: Schema.Struct({ issueId: Schema.String, threadMessageId: Schema.String }),
+      execute: (r) => sql`
+        UPDATE project_issues SET thread_message_id = ${r.threadMessageId}
+        WHERE id = ${r.issueId}`
+    })
+
+    // ── what has crossed between Linear and Taut (D11, D12) ──────────────────
+
+    /** Comments of this ticket the ledger already knows, in either direction. */
+    const commentsOfIssue = findAll({
+      Request: Schema.String,
+      Result: Schema.Struct({
+        linear_comment_id: Schema.String,
+        message_id: MessageId,
+        direction: Schema.Literal('in', 'out')
+      }),
+      execute: (issueId) =>
+        sql`SELECT linear_comment_id, message_id, direction FROM project_issue_comments WHERE issue_id = ${issueId}`
+    })
+
+    /** Whether this Taut message has already been pushed out — the "not twice" rule. */
+    const commentByMessage = findOne({
+      Request: Schema.String,
+      Result: Schema.Struct({ linear_comment_id: Schema.String }),
+      execute: (messageId) =>
+        sql`SELECT linear_comment_id FROM project_issue_comments WHERE message_id = ${messageId}`
+    })
+
+    const insertComment = run({
       Request: Schema.Struct({
-        id: Schema.String,
-        projectId: ProjectId,
-        linearId: Schema.String,
-        identifier: Schema.String,
-        title: Schema.String,
-        stateId: Schema.String,
-        stateName: Schema.String,
-        stateType: Schema.String,
-        stateColor: Schema.NullOr(Schema.String),
-        statePosition: Schema.Number,
-        priority: Schema.Number,
-        priorityLabel: Schema.NullOr(Schema.String),
-        assigneeId: Schema.NullOr(Schema.String),
-        assigneeName: Schema.NullOr(Schema.String),
-        assigneeAvatar: Schema.NullOr(Schema.String),
-        labels: Schema.String,
-        milestoneName: Schema.NullOr(Schema.String),
-        dueDate: Schema.NullOr(Schema.String),
-        url: Schema.String,
-        sortOrder: Schema.Number,
-        createdAt: Schema.NullOr(Schema.String),
-        updatedAt: Schema.NullOr(Schema.String),
+        linearCommentId: Schema.String,
+        issueId: Schema.String,
+        messageId: Schema.String,
+        direction: Schema.Literal('in', 'out'),
         syncedAt: Schema.String
       }),
       execute: (r) => sql`
-        INSERT INTO project_issues
-          (id, project_id, linear_id, identifier, title,
-           state_id, state_name, state_type, state_color, state_position,
-           priority, priority_label, assignee_id, assignee_name, assignee_avatar,
-           labels, milestone_name, due_date, url, sort_order, created_at, updated_at, synced_at)
-        VALUES (${r.id}, ${r.projectId}, ${r.linearId}, ${r.identifier}, ${r.title},
-                ${r.stateId}, ${r.stateName}, ${r.stateType}, ${r.stateColor}, ${r.statePosition},
-                ${r.priority}, ${r.priorityLabel}, ${r.assigneeId}, ${r.assigneeName},
-                ${r.assigneeAvatar}, ${r.labels}, ${r.milestoneName}, ${r.dueDate}, ${r.url},
-                ${r.sortOrder}, ${r.createdAt}, ${r.updatedAt}, ${r.syncedAt})`
+        INSERT OR IGNORE INTO project_issue_comments
+          (linear_comment_id, issue_id, message_id, direction, synced_at)
+        VALUES (${r.linearCommentId}, ${r.issueId}, ${r.messageId}, ${r.direction}, ${r.syncedAt})`
+    })
+
+    /**
+     * Who said it, as Linear should hear it (D11). Its own statement rather than a
+     * `Users` dependency: this service is built a tier below `Messages` and reads
+     * nothing but its own tables and `Linear`, and one join is a smaller price
+     * than moving the whole mirror up the layer graph.
+     */
+    const authorHandle = findOne({
+      Request: Schema.Struct({ companyId: Schema.String, authorId: Schema.String }),
+      Result: Schema.Struct({ handle: Schema.String }),
+      execute: (r) => sql`
+        SELECT LOWER(SUBSTR(u.email, 1, INSTR(u.email, '@') - 1)) AS handle
+        FROM users u JOIN memberships m ON m.user_id = u.id AND m.company_id = ${r.companyId}
+        WHERE u.id = ${r.authorId}
+        UNION ALL
+        SELECT a.handle AS handle FROM agents a
+        WHERE a.company_id = ${r.companyId} AND a.id = ${r.authorId}
+        LIMIT 1`
+    })
+
+    /** The agents a first message `@`-mentioned, so they can be joined to the channel (D21). */
+    const agentsByHandle = findAll({
+      Request: Schema.String,
+      Result: Schema.Struct({ id: AgentId, handle: Schema.String }),
+      execute: (companyId) => sql`SELECT id, handle FROM agents WHERE company_id = ${companyId}`
     })
 
     // ── the workspace's people (D15, D16) ────────────────────────────────────
@@ -432,6 +684,38 @@ export class Projects extends Effect.Service<Projects>()('Projects', {
           (error) => new Validation({ issues: [{ path: ['linear'], message: error.reason }] })
         )
       )
+
+    /**
+     * Linear's timestamp as the contract's `DateTimeUtc`
+     * (docs/build-plan-issues.md D13). A node Linear stamped unreadably is placed
+     * at now rather than dropped: the Activity feed is a time-ordered list, and one
+     * row in roughly the wrong place beats a row that silently is not there.
+     */
+    const atOf = (iso: string | undefined): DateTime.Utc =>
+      Option.getOrElse(DateTime.make(new Date(iso ?? '')), () => DateTime.unsafeNow())
+
+    /**
+     * The Linear team a ticket is filed under (docs/build-plan-issues.md D1, D14).
+     * Linear files every issue under a team and scopes every workflow state and
+     * label to one, so a project whose team id the mirror does not know is the
+     * existing "sync first" error (docs/build-plan-projects.md D21) rather than a
+     * guess — said in the same words here as there, on purpose.
+     */
+    const requireTeam = (project: Project): Effect.Effect<string, Validation> => {
+      const team = project.teams.find((candidate) => candidate.id !== undefined)
+      return team?.id === undefined
+        ? Effect.fail(
+            new Validation({
+              issues: [
+                {
+                  path: ['projectId'],
+                  message: `"${project.name}" has no Linear team in the mirror, and Linear files every issue under a team. An admin syncing projects again fixes this.`
+                }
+              ]
+            })
+          )
+        : Effect.succeed(team.id)
+    }
 
     const connectionOf = (companyId: CompanyId): Effect.Effect<LinearConnection> =>
       linear
@@ -628,13 +912,26 @@ export class Projects extends Effect.Service<Projects>()('Projects', {
         return fetched.length
       })
 
-    /** One Linear issue as the row the mirror stores (D18). */
-    const issueWrite = (projectId: ProjectId, issue: LinearIssue, syncedAt: string) => ({
-      id: newProjectIssueId(),
+    /**
+     * One Linear issue as the row the mirror stores (D18), widened by
+     * docs/build-plan-issues.md D6.
+     *
+     * `id` is a parameter because the same shape serves two writes with opposite
+     * needs: the sync inserts a fresh row and wants a new `pis_…`, while a
+     * write-through edit rewrites a row whose id the page's URL already is (D2).
+     */
+    const issueWrite = (
+      projectId: ProjectId,
+      issue: LinearIssue,
+      syncedAt: string,
+      id: string = newProjectIssueId()
+    ): typeof IssueWrite.Type => ({
+      id,
       projectId,
       linearId: issue.linearId,
       identifier: issue.identifier,
       title: issue.title,
+      description: issue.description ?? null,
       stateId: issue.stateId,
       stateName: issue.stateName,
       stateType: issue.stateType,
@@ -645,13 +942,26 @@ export class Projects extends Effect.Service<Projects>()('Projects', {
       assigneeId: issue.assigneeId ?? null,
       assigneeName: issue.assigneeName ?? null,
       assigneeAvatar: issue.assigneeAvatarUrl ?? null,
+      creatorId: issue.creatorId ?? null,
+      creatorName: issue.creatorName ?? null,
+      creatorAvatar: issue.creatorAvatarUrl ?? null,
       labels: JSON.stringify(issue.labels),
+      teamId: issue.teamId ?? null,
+      teamKey: issue.teamKey ?? null,
       milestoneName: issue.milestoneName ?? null,
+      milestoneId: issue.milestoneId ?? null,
       dueDate: issue.dueDate ?? null,
+      estimate: issue.estimate ?? null,
+      parentLinearId: issue.parentLinearId ?? null,
+      parentIdentifier: issue.parentIdentifier ?? null,
+      parentTitle: issue.parentTitle ?? null,
+      subIssueCount: issue.subIssueCount,
       url: issue.url,
       sortOrder: issue.sortOrder,
       createdAt: issue.createdAt ?? null,
       updatedAt: issue.updatedAt ?? null,
+      completedAt: issue.completedAt ?? null,
+      canceledAt: issue.canceledAt ?? null,
       syncedAt
     })
 
@@ -978,7 +1288,14 @@ export class Projects extends Effect.Service<Projects>()('Projects', {
             title: input.title,
             description: input.description,
             assigneeId: person.linear_id,
-            priority: input.priority
+            priority: input.priority,
+            // An agent still files the three fields it always did (D21); the
+            // pickers on the issue page are the human path's business, not its.
+            stateId: undefined,
+            labelIds: undefined,
+            milestoneId: undefined,
+            dueDate: undefined,
+            parentId: undefined
           })
         )
 
@@ -1052,6 +1369,659 @@ export class Projects extends Effect.Service<Projects>()('Projects', {
           : { canCreateIssues: true, reason: undefined }
       })
 
+    // ── one ticket, editable (docs/build-plan-issues.md) ─────────────────────
+
+    /**
+     * D15: `pis_…` first, then the identifier, case-insensitively and always
+     * inside the actor's company. Both halves matter: the page's own links carry
+     * the id, and everything a human pastes into chat is an identifier.
+     *
+     * A `NotFound` here says `ProjectIssue` and the ref as given, so a ticket in
+     * another company reads exactly like a ticket that does not exist — which is
+     * the only honest answer, and the one that does not confirm it exists.
+     */
+    const resolveIssue = (
+      companyId: CompanyId,
+      ref: string
+    ): Effect.Effect<ProjectIssueRow, NotFound> =>
+      Effect.gen(function* () {
+        const byPisId = yield* issueById({ companyId, issueId: ref })
+        if (Option.isSome(byPisId)) return byPisId.value
+        const byIdentifier = yield* issueByIdentifier({ companyId, identifier: ref })
+        if (Option.isSome(byIdentifier)) return byIdentifier.value
+        return yield* new NotFound({ entity: 'ProjectIssue', id: ref })
+      })
+
+    /** The project a ticket hangs under, which the detail page draws as its breadcrumb. */
+    const projectOfIssue = (
+      companyId: CompanyId,
+      row: ProjectIssueRow
+    ): Effect.Effect<Project, NotFound> =>
+      byId({ companyId, projectId: row.project_id }).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.fail(new NotFound({ entity: 'Project', id: row.project_id })),
+            onSome: (project) => Effect.succeed(toProject(project))
+          })
+        )
+      )
+
+    /**
+     * D2, the shape every write here ends in: take the issue Linear answered with,
+     * rewrite the row, re-read it and publish `project.issue.updated`. Nothing
+     * between the mutation and this is allowed to invent a field — if Linear did
+     * not say it, it is not in the row.
+     *
+     * A ticket Linear says now belongs to another project follows it, provided the
+     * mirror holds that project; if it does not (a project synced after this row),
+     * the ticket stays where it was until the next sync moves it.
+     */
+    const rewriteIssue = (
+      companyId: CompanyId,
+      row: ProjectIssueRow,
+      answered: LinearIssue
+    ): Effect.Effect<ProjectIssue, NotFound> =>
+      Effect.gen(function* () {
+        const moved = yield* projectByLinearId({ companyId, linearId: answered.projectLinearId })
+        const projectId = Option.isSome(moved) ? moved.value.id : row.project_id
+        yield* updateIssueRow(issueWrite(projectId, answered, nowIso(), row.id))
+
+        const after = yield* issueById({ companyId, issueId: row.id })
+        if (Option.isNone(after)) {
+          return yield* new NotFound({ entity: 'ProjectIssue', id: row.id })
+        }
+        const issue = toProjectIssue(after.value)
+        yield* publisher.transact(companyId, (emit) =>
+          emit({ type: 'project.issue.updated', payload: { projectId, issue } })
+        )
+        return issue
+      })
+
+    /**
+     * D15: one ticket, its project and its sub-issues, read entirely from the
+     * mirror. Deliberately never touches Linear: a detail page that re-fetches to
+     * draw itself is a page that is blank whenever Linear is slow (D6). The live
+     * half of the page is the Activity feed, and that is its own call.
+     *
+     * Any member, exactly as the project it hangs under is (docs/build-plan-projects.md D9).
+     */
+    const issueDetail = (companyId: CompanyId, ref: string): Effect.Effect<IssueDetail, NotFound> =>
+      Effect.gen(function* () {
+        const row = yield* resolveIssue(companyId, ref)
+        const project = yield* projectOfIssue(companyId, row)
+        const children = yield* subIssuesOf({ companyId, parentLinearId: row.linear_id })
+        /**
+         * D22: where the conversation lives, when there is one. Read from the
+         * root message rather than from the project, because it is the root that
+         * says which channel this ticket's thread is actually in — and a page that
+         * has the ticket but not the channel cannot render the one message that
+         * may be the whole thread (D21 defers membership, so the reader cannot
+         * find it themselves).
+         */
+        const threadChannelId =
+          row.thread_message_id === null
+            ? Option.none<ChannelId>()
+            : (yield* channelOfMessage(row.thread_message_id)).pipe(
+                Option.map((message) => message.channel_id)
+              )
+        return new IssueDetail({
+          issue: toProjectIssue(row),
+          project,
+          subIssues: children.map(toProjectIssue),
+          ...(Option.isNone(threadChannelId) ? {} : { threadChannelId: threadChannelId.value })
+        })
+      })
+
+    const issue = (
+      me: CurrentUserShape,
+      ref: string
+    ): Effect.Effect<IssueDetail, Unauthorized | NotFound> =>
+      actor(me).pipe(Effect.flatMap((who) => issueDetail(who.companyId, ref)))
+
+    /**
+     * D2, D4: member+ may change any field of a ticket, by writing it to Linear
+     * and taking Linear's answer as the row. An empty payload never reaches
+     * Linear: a patch that changes nothing is a bug in the caller, not a round
+     * trip worth making.
+     */
+    const updateIssueFields = (
+      companyId: CompanyId,
+      ref: string,
+      payload: UpdateIssuePayloadShape
+    ): Effect.Effect<ProjectIssue, NotFound | Validation> =>
+      Effect.gen(function* () {
+        const row = yield* resolveIssue(companyId, ref)
+
+        const input: LinearIssueUpdate = {
+          ...(payload.title === undefined ? {} : { title: payload.title }),
+          ...(payload.description === undefined ? {} : { description: payload.description }),
+          ...(payload.stateId === undefined ? {} : { stateId: payload.stateId }),
+          ...(payload.priority === undefined ? {} : { priority: payload.priority }),
+          ...(payload.assigneeId === undefined ? {} : { assigneeId: payload.assigneeId }),
+          ...(payload.labelIds === undefined ? {} : { labelIds: payload.labelIds }),
+          ...(payload.milestoneId === undefined ? {} : { projectMilestoneId: payload.milestoneId }),
+          ...(payload.dueDate === undefined ? {} : { dueDate: payload.dueDate }),
+          ...(payload.estimate === undefined ? {} : { estimate: payload.estimate }),
+          ...(payload.parentId === undefined ? {} : { parentId: payload.parentId }),
+          ...(payload.projectLinearId === undefined ? {} : { projectId: payload.projectLinearId })
+        }
+        if (Object.keys(input).length === 0) {
+          return yield* new Validation({
+            issues: [{ path: [], message: 'Nothing to change' }]
+          })
+        }
+
+        const answered = yield* orValidation(linear.updateIssue(companyId, row.linear_id, input))
+        const issue = yield* rewriteIssue(companyId, row, answered)
+        yield* Effect.logInfo(`linear: updated ${issue.identifier} for company ${companyId}`)
+        return issue
+      })
+
+    const updateIssue = (
+      me: CurrentUserShape,
+      ref: string,
+      payload: UpdateIssuePayloadShape
+    ): Effect.Effect<ProjectIssue, Unauthorized | Forbidden | NotFound | Validation> =>
+      actor(me).pipe(Effect.flatMap((who) => updateIssueFields(who.companyId, ref, payload)))
+
+    /**
+     * D1, D2: file a ticket from the issue page. The sibling of the agent path
+     * above and deliberately not the same function: an agent files *for* a mapped
+     * human and may set three fields, while a member filing here is already
+     * themselves and picks from the whole D14 pick-list. What the two share is the
+     * rule that matters — the team and the project come from the mirror, never
+     * from the caller.
+     */
+    const fileIssue = (
+      me: CurrentUserShape,
+      projectId: ProjectId,
+      payload: CreateIssuePayloadShape
+    ): Effect.Effect<ProjectIssue, Unauthorized | Forbidden | NotFound | Validation> =>
+      Effect.gen(function* () {
+        const who = yield* actor(me)
+        const row = yield* byId({ companyId: who.companyId, projectId })
+        if (Option.isNone(row)) {
+          return yield* new NotFound({ entity: 'Project', id: projectId })
+        }
+        const project = toProject(row.value)
+        const teamId = yield* requireTeam(project)
+
+        const created = yield* orValidation(
+          linear.createIssue(who.companyId, {
+            teamId,
+            projectLinearId: project.linearId,
+            title: payload.title,
+            description: payload.description,
+            stateId: payload.stateId,
+            priority: payload.priority,
+            assigneeId: payload.assigneeId,
+            labelIds: payload.labelIds,
+            milestoneId: payload.milestoneId,
+            dueDate: payload.dueDate,
+            parentId: payload.parentId
+          })
+        )
+
+        const write = issueWrite(project.id, created, nowIso())
+        yield* insertIssue(write)
+        const stored = yield* issueById({ companyId: who.companyId, issueId: write.id })
+        if (Option.isNone(stored)) {
+          return yield* new NotFound({ entity: 'ProjectIssue', id: created.linearId })
+        }
+        const issue = toProjectIssue(stored.value)
+        yield* publisher.transact(who.companyId, (emit) =>
+          emit({ type: 'project.issue.created', payload: { projectId: project.id, issue } })
+        )
+        yield* Effect.logInfo(`linear: ${issue.identifier} filed under ${project.name}`)
+        return issue
+      })
+
+    /**
+     * D4, D5: admin+ trashes the ticket in Linear and drops the mirror row. Admin
+     * rather than member because it is the one write here Taut cannot undo, so it
+     * keeps the gate the connection has.
+     *
+     * The thread survives the row and its root message is edited to say what
+     * happened — dropping the conversation with the ticket would destroy the only
+     * record of *why* it was deleted, and leaving it unmarked would leave a live
+     * thread about a ticket that no longer exists.
+     */
+    const deleteIssue = (
+      me: CurrentUserShape,
+      ref: string
+    ): Effect.Effect<void, Unauthorized | Forbidden | NotFound | Validation, Messages> =>
+      Effect.gen(function* () {
+        const who = yield* actor(me)
+        yield* requireAdmin(who)
+        const row = yield* resolveIssue(who.companyId, ref)
+
+        yield* orValidation(linear.deleteIssue(who.companyId, row.linear_id))
+
+        const threadId = row.thread_message_id
+        if (threadId !== null) {
+          const messages = yield* Messages
+          const root = yield* messages.byId(who.companyId, threadId)
+          if (Option.isSome(root)) {
+            yield* messages.editAsSystem(
+              who.companyId,
+              threadId,
+              `${root.value.body}\n\n_${row.identifier} was deleted in Linear._`
+            )
+          }
+        }
+
+        yield* deleteIssueRow(row.id)
+        yield* publisher.transact(who.companyId, (emit) =>
+          emit({
+            type: 'project.issue.deleted',
+            payload: { projectId: row.project_id, issueId: row.id }
+          })
+        )
+        yield* Effect.logInfo(`linear: ${row.identifier} deleted by ${who.userId}`)
+      })
+
+    /**
+     * D14: the pick-lists, read live from Linear on every call. No table backs
+     * them: a mirrored pick-list goes stale silently and files tickets into states
+     * that no longer exist. The client caches them per session, which is the right
+     * lifetime for something that changes when an admin changes a workflow.
+     */
+    const optionsOf = (
+      companyId: CompanyId,
+      projectId: ProjectId
+    ): Effect.Effect<IssueOptions, NotFound | Validation> =>
+      Effect.gen(function* () {
+        const row = yield* byId({ companyId, projectId })
+        if (Option.isNone(row)) {
+          return yield* new NotFound({ entity: 'Project', id: projectId })
+        }
+        const project = toProject(row.value)
+        const teamId = yield* requireTeam(project)
+        const options = yield* orValidation(
+          linear.issueOptions(companyId, teamId, project.linearId)
+        )
+        return new IssueOptions({
+          states: options.states.map(
+            (state) =>
+              new IssueState({
+                id: state.id,
+                name: state.name,
+                type: Schema.is(IssueStateType)(state.type) ? state.type : 'unknown',
+                ...(state.color === undefined ? {} : { color: state.color }),
+                position: state.position
+              })
+          ),
+          labels: options.labels.map((label) => ({
+            id: label.id,
+            name: label.name,
+            ...(label.color === undefined ? {} : { color: label.color })
+          })),
+          members: options.members.map((member) => ({
+            linearId: member.linearId,
+            name: member.name,
+            ...(member.avatarUrl === undefined ? {} : { avatarUrl: member.avatarUrl })
+          })),
+          milestones: options.milestones,
+          projects: options.projects
+        })
+      })
+
+    const issueOptions = (
+      me: CurrentUserShape,
+      projectId: ProjectId
+    ): Effect.Effect<IssueOptions, Unauthorized | NotFound | Validation> =>
+      actor(me).pipe(Effect.flatMap((who) => optionsOf(who.companyId, projectId)))
+
+    // ── the ticket's thread (D8–D11, D21) ────────────────────────────────────
+
+    /**
+     * D8, D9, D21: say the first thing on a ticket, and the conversation exists.
+     *
+     * Idempotent by design: a ticket that already has a thread gets a reply
+     * instead of a second root, because "open the thread" is what the composer
+     * calls the first time and there is no way for two people clicking at once to
+     * mean two threads.
+     *
+     * The body goes through `Messages.postAsUser` and not through an insert of our
+     * own, which is the whole of D9: mentions resolve, agents are woken, tasks are
+     * created, notifications and unread counts move, and the message is in search —
+     * because it is an ordinary message in an ordinary channel that the sidebar
+     * happens not to draw.
+     */
+    const openIssueThread = (
+      me: CurrentUserShape,
+      ref: string,
+      body: string
+    ): Effect.Effect<
+      ProjectIssue,
+      Unauthorized | Forbidden | NotFound | Validation,
+      Messages | Channels
+    > =>
+      Effect.gen(function* () {
+        const who = yield* actor(me)
+        const messages = yield* Messages
+        const channels = yield* Channels
+        const row = yield* resolveIssue(who.companyId, ref)
+        const project = yield* projectOfIssue(who.companyId, row)
+
+        const channelId = yield* channels.ensureProjectChannel(
+          who.companyId,
+          project.id,
+          // `DisplayName` caps at 80; a project named longer than that still needs
+          // a channel, and the name is only ever seen in a notification's title.
+          project.name.slice(0, 80)
+        )
+        yield* channels.join(channelId, { memberKind: 'user', memberId: who.userId })
+
+        /**
+         * D21: an agent that was `@`-mentioned is joined too, on demand. Without
+         * this the mention resolves to nobody — `Messages.resolveMentions` keeps
+         * only handles that belong to the channel, precisely so that nobody can be
+         * pinged into a room they are not in.
+         */
+        const handles = new Set(
+          [...body.matchAll(/@([a-z0-9][a-z0-9._-]*)/gi)].map((match) =>
+            (match[1] ?? '').toLowerCase().replace(/[._-]+$/, '')
+          )
+        )
+        if (handles.size > 0) {
+          const agents = yield* agentsByHandle(who.companyId)
+          yield* Effect.forEach(
+            agents.filter((agent) => handles.has(agent.handle)),
+            (agent) => channels.join(channelId, { memberKind: 'agent', memberId: agent.id }),
+            { discard: true }
+          )
+        }
+
+        const existing = row.thread_message_id
+        const opened =
+          existing === null ? false : Option.isSome(yield* messages.byId(who.companyId, existing))
+        const posted = yield* messages.postAsUser(who.companyId, {
+          userId: who.userId,
+          channelId,
+          body,
+          ...(opened && existing !== null ? { threadId: existing } : {})
+        })
+        if (opened) return toProjectIssue(row)
+
+        yield* setThreadMessage({ issueId: row.id, threadMessageId: posted.id })
+        const after = yield* issueById({ companyId: who.companyId, issueId: row.id })
+        if (Option.isNone(after)) {
+          return yield* new NotFound({ entity: 'ProjectIssue', id: row.id })
+        }
+        const issue = toProjectIssue(after.value)
+        yield* publisher.transact(who.companyId, (emit) =>
+          emit({
+            type: 'project.issue.thread.opened',
+            payload: { projectId: row.project_id, issueId: row.id, threadId: posted.id }
+          })
+        )
+        yield* Effect.logInfo(`linear: thread opened on ${row.identifier} by ${who.userId}`)
+        return issue
+      })
+
+    /**
+     * D13: Linear's own history for the ticket, plus the comments Taut refuses to
+     * author — and, on the way past, the reconcile of the comments it will (D12).
+     *
+     * Both halves are read live and neither is stored, so a Linear that refuses is
+     * a `Validation`: the page keeps the thread it already has and says the
+     * history could not be read, which is honest in a way a stale copy is not.
+     */
+    const issueActivity = (
+      me: CurrentUserShape,
+      ref: string
+    ): Effect.Effect<IssueActivity, Unauthorized | NotFound | Validation, Messages> =>
+      Effect.gen(function* () {
+        const who = yield* actor(me)
+        const messages = yield* Messages
+        const row = yield* resolveIssue(who.companyId, ref)
+
+        const live = yield* orValidation(linear.issue(who.companyId, row.linear_id))
+        const history = yield* orValidation(linear.issueHistory(who.companyId, row.linear_id))
+
+        const known = new Map(
+          (yield* commentsOfIssue(row.id)).map((entry) => [entry.linear_comment_id, entry])
+        )
+        const threadId = row.thread_message_id
+        /**
+         * The thread's root, read once: a mirrored comment is a reply in the
+         * channel that root lives in, and a `thread_message_id` pointing at a
+         * message somebody has since deleted means there is nowhere to put one.
+         */
+        const root =
+          threadId === null ? Option.none<Message>() : yield* messages.byId(who.companyId, threadId)
+        const unmapped: Array<IssueLinearComment> = []
+
+        for (const comment of live.comments) {
+          const existing = known.get(comment.linearId)
+          if (existing !== undefined) {
+            // Only inbound mirrors take their timestamp from Linear. Outbound
+            // messages keep the time they were actually written in Taut.
+            const sourceAt = DateTime.make(new Date(comment.createdAt ?? ''))
+            if (existing.direction === 'in' && Option.isSome(sourceAt)) {
+              yield* messages.restoreImportedCreatedAt(
+                who.companyId,
+                existing.message_id,
+                sourceAt.value
+              )
+            }
+            continue
+          }
+          const authorLinearId = comment.authorLinearId
+          const mapping =
+            authorLinearId === undefined
+              ? Option.none<LinearUserRow>()
+              : yield* userByLinearId({ companyId: who.companyId, linearId: authorLinearId })
+          const member = Option.isSome(mapping) ? mapping.value.user_id : null
+
+          /**
+           * D11's honesty rule, and the one place it is enforced. A comment whose
+           * Linear author is nobody in Taut stays a Linear comment: mirroring it
+           * as a message means picking a Taut author for it, and every available
+           * choice is a lie about who said it.
+           *
+           * A mapped author's comment still needs somewhere to land, so a ticket
+           * with no thread yet keeps it in the Activity list and out of the
+           * ledger — the next read after somebody opens the thread mirrors it (D8).
+           */
+          if (member === null || threadId === null || Option.isNone(root)) {
+            unmapped.push(
+              new IssueLinearComment({
+                linearId: comment.linearId,
+                body: comment.body,
+                ...(comment.authorLinearId === undefined || comment.authorName === undefined
+                  ? {}
+                  : {
+                      author: {
+                        linearId: comment.authorLinearId,
+                        name: comment.authorName,
+                        ...(comment.authorAvatarUrl === undefined
+                          ? {}
+                          : { avatarUrl: comment.authorAvatarUrl })
+                      }
+                    }),
+                createdAt: atOf(comment.createdAt),
+                url: comment.url === '' ? row.url : comment.url
+              })
+            )
+            continue
+          }
+
+          /**
+           * Posted as the human the Linear author maps to, through `Messages` like
+           * everything else in the thread (D9). `Effect.option` because one
+           * comment Taut cannot post — the human left the company since — must not
+           * take the whole Activity read down with it; it is simply not recorded,
+           * and the next read tries again.
+           */
+          const mirrored = yield* messages
+            .postAsUser(who.companyId, {
+              userId: member,
+              channelId: root.value.channelId,
+              threadId,
+              body: comment.body,
+              createdAt: atOf(comment.createdAt)
+            })
+            .pipe(Effect.option)
+          if (Option.isNone(mirrored)) continue
+          yield* insertComment({
+            linearCommentId: comment.linearId,
+            issueId: row.id,
+            messageId: mirrored.value.id,
+            direction: 'in',
+            syncedAt: nowIso()
+          })
+        }
+
+        /**
+         * Linear records no history node for the creation itself, so the feed's
+         * first line is built from the ticket: `created` is a kind the contract
+         * has (D13) and an event a reader expects to see.
+         */
+        const created =
+          live.issue.createdAt === undefined
+            ? []
+            : [
+                new IssueHistoryEvent({
+                  linearId: `${row.linear_id}:created`,
+                  at: atOf(live.issue.createdAt),
+                  ...(live.issue.creatorId === undefined || live.issue.creatorName === undefined
+                    ? {}
+                    : {
+                        actor: {
+                          linearId: live.issue.creatorId,
+                          name: live.issue.creatorName,
+                          ...(live.issue.creatorAvatarUrl === undefined
+                            ? {}
+                            : { avatarUrl: live.issue.creatorAvatarUrl })
+                        }
+                      }),
+                  kind: 'created' as const,
+                  summary: 'created the issue'
+                })
+              ]
+
+        const events = history.map(
+          (event) =>
+            new IssueHistoryEvent({
+              linearId: event.linearId,
+              at: atOf(event.at),
+              ...(event.actorLinearId === undefined || event.actorName === undefined
+                ? {}
+                : {
+                    actor: {
+                      linearId: event.actorLinearId,
+                      name: event.actorName,
+                      ...(event.actorAvatarUrl === undefined
+                        ? {}
+                        : { avatarUrl: event.actorAvatarUrl })
+                    }
+                  }),
+              kind: Schema.is(IssueHistoryKind)(event.kind) ? event.kind : 'other',
+              summary: event.summary
+            })
+        )
+
+        return new IssueActivity({ history: [...created, ...events], comments: unmapped })
+      })
+
+    // ── agent-facing (D18), and the task runner's one read (D17) ─────────────
+
+    /**
+     * D18: the same two operations an agent may perform on a ticket, with no
+     * session behind them. They exist beside the member-facing pair above rather
+     * than instead of them because the gate is different: a human is gated by
+     * their role, an agent by whether the human it is answering is mapped to
+     * Linear at all (D21) — which the caller checks with `canCreateIssues`.
+     */
+    const issueForAgent = (
+      companyId: CompanyId,
+      ref: string
+    ): Effect.Effect<IssueDetail, NotFound> => issueDetail(companyId, ref)
+
+    /**
+     * D18: the same pick-lists, for an agent resolving a state *name* to the id a
+     * mutation needs. An agent cannot know a workflow state's UUID, and asking it
+     * to would be asking it to guess.
+     */
+    const issueOptionsForAgent = (
+      companyId: CompanyId,
+      projectId: ProjectId
+    ): Effect.Effect<IssueOptions, NotFound | Validation> => optionsOf(companyId, projectId)
+
+    const updateIssueForAgent = (
+      companyId: CompanyId,
+      ref: string,
+      payload: UpdateIssuePayloadShape
+    ): Effect.Effect<ProjectIssue, NotFound | Validation> =>
+      updateIssueFields(companyId, ref, payload)
+
+    /**
+     * D17: the ticket a thread is about, or nothing. One indexed read that answers
+     * nothing for every ordinary thread, which is why the task runner may ask it
+     * on every wake without anybody noticing.
+     */
+    const issueForThread = (
+      companyId: CompanyId,
+      threadId: MessageId
+    ): Effect.Effect<Option.Option<IssueDetail>> =>
+      Effect.gen(function* () {
+        const row = yield* issueByThread({ companyId, threadId })
+        if (Option.isNone(row)) return Option.none()
+        const detail = yield* issueDetail(companyId, row.value.id).pipe(Effect.option)
+        return detail
+      })
+
+    /**
+     * D11, D12: a Taut message about a ticket, out to Linear as a comment.
+     *
+     * Driven by a `message.created` subscriber and never by an HTTP handler, which
+     * is the point: a chat message must not fail because Linear is down, so every
+     * failure here is logged and dropped. The message is already posted; the worst
+     * case is a comment Linear never hears about, and the ledger is what keeps a
+     * later retry from saying it twice.
+     */
+    const pushIssueComment = (
+      companyId: CompanyId,
+      message: {
+        readonly id: MessageId
+        readonly threadId: MessageId | undefined
+        readonly authorKind: 'user' | 'agent'
+        readonly authorId: string
+        readonly body: string
+      }
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (message.body.trim() === '') return
+        // The root of an issue thread is itself the thread; a reply names it.
+        const threadId = message.threadId ?? message.id
+        const row = yield* issueByThread({ companyId, threadId })
+        if (Option.isNone(row)) return
+        // Already crossed, in either direction: a comment mirrored *in* has a row
+        // here too, which is what stops it being pushed straight back out (D12).
+        if (Option.isSome(yield* commentByMessage(message.id))) return
+
+        const handle = yield* authorHandle({ companyId, authorId: message.authorId })
+        const who = Option.isSome(handle) ? handle.value.handle : message.authorId
+        const pushed = yield* linear
+          .createComment(companyId, row.value.linear_id, `@${who} via Taut — ${message.body}`)
+          .pipe(Effect.option)
+        if (Option.isNone(pushed)) {
+          yield* Effect.logWarning(
+            `linear: could not push a Taut reply to ${row.value.identifier}; dropped`
+          )
+          return
+        }
+        yield* insertComment({
+          linearCommentId: pushed.value,
+          issueId: row.value.id,
+          messageId: message.id,
+          direction: 'out',
+          syncedAt: nowIso()
+        })
+      })
+
     return {
       connection,
       connect,
@@ -1065,7 +2035,21 @@ export class Projects extends Effect.Service<Projects>()('Projects', {
       listForAgent,
       canCreateIssues,
       linearUsers,
-      linkLinearUser
+      linkLinearUser,
+      // one ticket (docs/build-plan-issues.md)
+      issue,
+      issueActivity,
+      updateIssue,
+      deleteIssue,
+      openIssueThread,
+      issueOptions,
+      fileIssue,
+      // server-internal
+      issueForAgent,
+      issueOptionsForAgent,
+      updateIssueForAgent,
+      issueForThread,
+      pushIssueComment
     } as const
   })
 }) {}

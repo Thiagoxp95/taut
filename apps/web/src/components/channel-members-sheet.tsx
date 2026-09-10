@@ -1,4 +1,4 @@
-import { UserMinusIcon, UsersIcon } from 'lucide-react'
+import { UserMinusIcon, UsersIcon } from '@taut/ui/components/icons'
 import type { Channel } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
 import {
@@ -56,6 +56,8 @@ export function ChannelMembersSheet({
                 return (
                   <li key={member.memberId} className="flex items-center gap-3 px-3 py-2">
                     <EntityAvatar
+                      onProfileNavigate={() => onOpenChange(false)}
+                      memberId={member.memberId}
                       avatar={entry?.avatar ?? { kind: 'emoji', value: '👤' }}
                       kind={member.memberKind}
                       face={entry?.face}
