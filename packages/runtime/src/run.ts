@@ -50,6 +50,8 @@ export const runTask = (o: RunTaskOptions): Stream.Stream<AgentEvent, ExecFailed
     for (const secret of secretsOf(o.command.env, o.command.files)) redactor.add(secret)
     for (const secret of o.secrets ?? []) redactor.add(secret)
     let sawDone = false
+    let sawError = false
+    const stderr: Array<string> = []
 
     const writeFiles = Effect.forEach(
       o.command.files ?? [],
@@ -71,20 +73,34 @@ export const runTask = (o: RunTaskOptions): Stream.Stream<AgentEvent, ExecFailed
         case 'stdout': {
           const parsed = o.adapter.parseLine(redactor.redact(out.line))
           if (parsed.some((e) => e.type === 'done')) sawDone = true
+          if (parsed.some((e) => e.type === 'error')) sawError = true
           return parsed
         }
-        case 'stderr':
-          o.onStderr?.(redactor.redact(out.line))
+        case 'stderr': {
+          const line = redactor.redact(out.line)
+          o.onStderr?.(line)
+          if (line.trim() !== '') {
+            stderr.push(line.slice(-2000))
+            if (stderr.length > 5) stderr.shift()
+          }
           return []
+        }
         case 'exit': {
           if (sawDone) return []
           const r = out.result
           const reason = r.killedBy !== undefined ? `killed: ${r.killedBy}` : `exit ${r.exitCode}`
           const ok = r.exitCode === 0 && r.killedBy === undefined
           const done: AgentEvent = { type: 'done', ok, reason, durationMs: r.durationMs }
-          return ok
+          const detail = stderr.join('\n').slice(-4000)
+          return ok || sawError
             ? [done]
-            : [{ type: 'error', message: `runtime ended without a result (${reason})` }, done]
+            : [
+                {
+                  type: 'error',
+                  message: `runtime ended without a result (${reason})${detail === '' ? '' : `: ${detail}`}`
+                },
+                done
+              ]
         }
       }
     })

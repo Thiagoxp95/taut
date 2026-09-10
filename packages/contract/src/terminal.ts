@@ -95,7 +95,13 @@ export const BrowserViewport = Schema.Struct({
 export type BrowserViewport = typeof BrowserViewport.Type
 export const TerminalViewport = Schema.TaggedStruct('viewport', BrowserViewport.fields)
 
+/** Select this viewer's page without changing browser focus; null resumes following. */
+export const TerminalSelectTab = Schema.TaggedStruct('selectTab', {
+  tabId: Schema.NullOr(Schema.String.pipe(Schema.minLength(1), Schema.maxLength(256)))
+})
+
 export const TerminalClientFrame = Schema.Union(
+  TerminalSelectTab,
   TerminalStdin,
   TerminalResize,
   TerminalViewport,
@@ -123,6 +129,7 @@ export const TerminalBrowserFrame = Schema.TaggedStruct('frame', {
 })
 /** The browser's open pages and the page currently shown by the live view. */
 export const TerminalBrowserTabs = Schema.TaggedStruct('tabs', {
+  following: Schema.optional(Schema.Boolean),
   tabs: Schema.Array(
     Schema.Struct({
       id: Schema.String,

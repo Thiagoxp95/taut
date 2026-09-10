@@ -12,6 +12,14 @@ import {
 } from '@taut/ui/components/icons'
 import type { ChannelId } from '@taut/contract'
 import { Button } from '@taut/ui/components/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@taut/ui/components/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@taut/ui/components/tooltip'
 import { cn } from '@taut/ui/lib/utils'
 
@@ -19,6 +27,7 @@ import { EntityAvatar } from '@/components/entity-avatar'
 import { HuddlePrejoin } from '@/components/huddle-prejoin'
 import { useChannel, useDmView, useLookupMember } from '@/hooks/use-directory'
 import { useChannelCall, useElsewhereCall, useHuddle } from '@/hooks/use-huddle'
+import { useCallsConfig } from '@/lib/api'
 import { desktop, huddlePath } from '@/lib/desktop'
 import type { HuddleParticipant } from '@/lib/livekit'
 
@@ -197,6 +206,7 @@ export function HuddleButton({
   iconOnly?: boolean
 }) {
   const { enabled, call, joining, leave } = useHuddle()
+  const config = useCallsConfig()
   const open = useChannelCall(channelId)
   const channel = useChannel(channelId)
   const dm = useDmView(channelId)
@@ -204,18 +214,22 @@ export function HuddleButton({
   const [prejoin, setPrejoin] = React.useState(false)
 
   // Wait for the DM recipient to resolve: agents have no voice support.
-  if (
-    !enabled ||
-    channel === undefined ||
-    (channel.kind === 'dm' && dm?.partner?.kind !== 'user')
-  ) {
+  if (channel === undefined || (channel.kind === 'dm' && dm?.partner?.kind !== 'user')) {
     return null
   }
 
   const here = call?.channelId === channelId
   const busy = joining === channelId
   const count = open?.participants.length ?? 0
-  const label = here ? 'Leave huddle' : count > 0 ? `Join huddle · ${count}` : 'Start huddle'
+  const label = here
+    ? 'Leave huddle'
+    : config.isPending
+      ? 'Checking huddles…'
+      : !enabled
+        ? 'Huddle unavailable'
+        : count > 0
+          ? `Join huddle · ${count}`
+          : 'Start huddle'
 
   return (
     <>
@@ -226,7 +240,7 @@ export function HuddleButton({
             size="sm"
             className={iconOnly ? 'h-9 gap-1 px-2' : undefined}
             aria-label={label}
-            disabled={busy}
+            disabled={busy || config.isPending}
             onClick={() => (here ? leave() : setPrejoin(true))}
           >
             {busy ? (
@@ -247,7 +261,38 @@ export function HuddleButton({
         </TooltipTrigger>
         <TooltipContent>{label}</TooltipContent>
       </Tooltip>
-      <HuddlePrejoin channelId={channelId} open={prejoin} onOpenChange={setPrejoin} />
+      {enabled ? (
+        <HuddlePrejoin channelId={channelId} open={prejoin} onOpenChange={setPrejoin} />
+      ) : (
+        <Dialog open={prejoin} onOpenChange={setPrejoin}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>
+                {config.isError ? 'Could not check huddles' : 'Huddles need server setup'}
+              </DialogTitle>
+              <DialogDescription>
+                {config.isError
+                  ? 'Could not reach the calling service. Try again in a moment.'
+                  : 'The calling service has not been connected to this workspace. Ask your administrator to finish setting up huddles.'}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button type="button" variant="secondary" onClick={() => setPrejoin(false)}>
+                Close
+              </Button>
+              {config.isError && (
+                <Button
+                  type="button"
+                  disabled={config.isFetching}
+                  onClick={() => void config.refetch()}
+                >
+                  Try again
+                </Button>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </>
   )
 }

@@ -41,6 +41,7 @@ const updates: DesktopUpdateBridge = {
 }
 
 const taut: TautBridge = {
+  changeServer: () => ipcRenderer.send('taut:setup:open'),
   updates,
   platform: info.platform,
   version: info.version,

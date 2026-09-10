@@ -66,6 +66,7 @@ function BrowserStream({
   const occupied = control.holder !== null && !driving
   const take = (pause: boolean) =>
     connectionRef.current?.send({ _tag: 'control', hold: true, pause })
+  const [following, setFollowing] = React.useState(true)
   const [tabs, setTabs] = React.useState<TabsFrame | null>(null)
   const [browser, setBrowser] = React.useState<BrowserFrame | null>(null)
   const [error, setError] = React.useState<string>()
@@ -84,6 +85,7 @@ function BrowserStream({
           case 'tabs':
             if (frame.activeTabId !== activeTabId) setReceived(false)
             activeTabId = frame.activeTabId
+            if (frame.following !== undefined) setFollowing(frame.following)
             setTabs(frame)
             break
           case 'browser':
@@ -96,6 +98,7 @@ function BrowserStream({
               setError(undefined)
               setReceived(false)
               setTabs(null)
+              setFollowing(true)
             }
             break
           case 'error':
@@ -160,7 +163,9 @@ function BrowserStream({
                 ? 'You are driving'
                 : occupied
                   ? 'Controlled in another view'
-                  : 'Following agent'}
+                  : following
+                    ? 'Following agent'
+                    : 'Viewing selected tab'}
             </span>
           </p>
         </div>
@@ -193,19 +198,24 @@ function BrowserStream({
           aria-label="Agent browser tabs"
         >
           {tabs.tabs.map((tab) => (
-            <div
+            <button
+              type="button"
               key={tab.id}
+              onClick={() => {
+                connectionRef.current?.send({ _tag: 'selectTab', tabId: tab.id })
+                setFollowing(false)
+              }}
               ref={(element) => {
                 if (tab.id === tabs.activeTabId)
                   element?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
               }}
               aria-current={tab.id === tabs.activeTabId ? 'page' : undefined}
               title={tab.url}
-              className="flex max-w-52 min-w-24 shrink-0 items-center gap-2 rounded-t-md border border-b-0 border-transparent px-3 py-2 text-xs text-muted-foreground aria-[current=page]:border-border aria-[current=page]:bg-background aria-[current=page]:text-foreground"
+              className="flex max-w-52 min-w-24 shrink-0 items-center gap-2 rounded-t-md border border-b-0 border-transparent px-3 py-2 text-xs text-muted-foreground aria-[current=page]:border-border aria-[current=page]:bg-background aria-[current=page]:text-foreground cursor-pointer focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-[-2px]"
             >
               <GlobeIcon className="size-3 shrink-0" aria-hidden="true" />
               <span className="truncate">{tab.title || tab.url || 'New tab'}</span>
-            </div>
+            </button>
           ))}
         </div>
       ) : null}
@@ -214,6 +224,19 @@ function BrowserStream({
         <span className="truncate" title={activeTab?.url}>
           {activeTab?.url || 'Waiting for a page…'}
         </span>
+        {!following ? (
+          <Button
+            className="ml-auto shrink-0"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              connectionRef.current?.send({ _tag: 'selectTab', tabId: null })
+              setFollowing(true)
+            }}
+          >
+            Follow agent
+          </Button>
+        ) : null}
       </div>
       {control.reason ? (
         <p role="status" className="px-4 py-2 text-xs text-muted-foreground">
@@ -263,6 +286,7 @@ function BrowserStream({
                 setError(undefined)
                 setBrowser(null)
                 setTabs(null)
+                setFollowing(true)
                 setReceived(false)
                 setAttempt((value) => value + 1)
               }}

@@ -230,7 +230,8 @@ describe('inject', () => {
       mcpServers: { taut: { command: 'node', args: ['/opt/taut/mcp.js'], env } }
     })
     expect(cursorArgs).toEqual(['--approve-mcps'])
-    expect(cursorCliJson).toEqual({ permissions: { allow: ['Mcp(taut:*)'] } })
+    // Cursor validates both arrays before starting, even when there are no denied tools.
+    expect(cursorCliJson).toEqual({ permissions: { allow: ['Mcp(taut:*)'], deny: [] } })
     expect(cursorCliJsonFor(o)).toEqual(cursorCliJson)
   })
 
@@ -242,7 +243,7 @@ describe('inject', () => {
       }
     })
     expect(cursorCliJsonFor(withBrowser)).toEqual({
-      permissions: { allow: ['Mcp(taut:*)', 'Mcp(browser:*)'] }
+      permissions: { allow: ['Mcp(taut:*)', 'Mcp(browser:*)'], deny: [] }
     })
   })
 

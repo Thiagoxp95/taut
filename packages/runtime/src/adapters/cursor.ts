@@ -1,8 +1,8 @@
 /**
- * Cursor CLI (`cursor-agent`) adapter. **Tested only for `detect()`** — the
- * command follows `cursor-agent --help` (2026.04.30) and https://cursor.com/docs/cli/headless;
- * the parser is best effort over the documented stream-json shapes
- * (docs/research/agent-orchestration.md). Not run against a live account from Taut.
+ * Cursor CLI (`cursor-agent`) adapter. The command follows `cursor-agent --help`
+ * and https://cursor.com/docs/cli/headless. A live API-key smoke test using Taut's
+ * isolated local environment passed on 2026-09-10 (CLI 2026.09.02-c22c1a3);
+ * the parser follows the documented stream-json shapes (docs/research/agent-orchestration.md).
  *
  *   cursor-agent -p --output-format stream-json --trust --workspace <cwd>
  *                [--mode plan] [--force] [--model <m>] [--resume <chatId>]
@@ -18,7 +18,9 @@
  * The prompt is argv (~120 KB cap per Sandcastle's guard). `plan` → `--mode plan`
  * (read-only); `auto-edit` → `--force` so edits apply without prompts. Env:
  * `cursor.api_key` → `CURSOR_API_KEY`. Cursor keeps its state in `~/.cursor`, i.e.
- * inside the persistent agent home.
+ * inside the persistent agent home. API-key runs use an in-memory credential store:
+ * Cursor otherwise persists exchanged tokens to the macOS keychain, which prompts
+ * for a missing keychain under the isolated HOME. The vault supplies each run's key.
  *
  * File grants: `cursor-agent --help` (2026.04.30) has no `--add-dir`, and `--force` scopes
  * nothing, so `input.addDirs` is ignored here; the grants reach the agent only through the
@@ -50,7 +52,11 @@ export const buildCursorCommand = (input: BuildCommandInput): BuiltCommand => {
   if (input.resumeSessionId !== undefined) cmd.push('--resume', input.resumeSessionId)
   if (input.mcp !== undefined) cmd.push('--approve-mcps')
   cmd.push(input.prompt)
-  return { cmd, env: credentialEnv({ 'cursor.api_key': 'CURSOR_API_KEY' }, input.credential) }
+  const env = credentialEnv({ 'cursor.api_key': 'CURSOR_API_KEY' }, input.credential)
+  // Supported by Cursor's credential-store selector (CLI 2026.09.02-c22c1a3).
+  // Keep saved-login discovery intact when the caller does not inject a key.
+  if (input.credential?.kind === 'cursor.api_key') env['AGENT_CLI_CREDENTIAL_STORE'] = 'memory'
+  return { cmd, env }
 }
 
 /**

@@ -54,7 +54,7 @@ export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
  */
 export const RUNTIME_MODEL_EXAMPLE: Record<RuntimeKind, string> = {
   'claude-code': 'claude-sonnet-4-5',
-  codex: 'gpt-5-codex',
+  codex: 'gpt-6-astra',
   cursor: 'auto',
   opencode: 'anthropic/claude-sonnet-4-5'
 }

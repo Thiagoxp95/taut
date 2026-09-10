@@ -62,6 +62,11 @@ export const buildCodexCommand = (input: BuildCommandInput): BuiltCommand => {
     const effort = input.reasoningEffort === 'max' ? 'high' : input.reasoningEffort
     cmd.push('-c', `model_reasoning_effort="${effort}"`)
   }
+  if (input.fastMode !== undefined) {
+    // Codex config uses "fast" (mapped by the CLI to the API's priority tier).
+    cmd.push('-c', `service_tier="${input.fastMode ? 'fast' : 'default'}"`)
+    if (input.fastMode) cmd.push('-c', 'features.fast_mode=true')
+  }
   cmd.push('-')
 
   const codexHome = posix.join(input.home, TAUT_PATHS.codexHome)

@@ -63,9 +63,11 @@ export default function App(): React.JSX.Element {
 
         <form className="flex flex-col gap-4" onSubmit={submit}>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="instance">Instance URL</Label>
+            <Label htmlFor="instance">Server address</Label>
             <Input
               id="instance"
+              aria-describedby="instance-help"
+              aria-invalid={error !== undefined}
               autoFocus
               spellCheck={false}
               autoCapitalize="off"
@@ -76,13 +78,13 @@ export default function App(): React.JSX.Element {
               onChange={(event) => setUrl(event.target.value)}
             />
             {error === undefined ? (
-              <p className="text-xs text-muted-foreground">
+              <p id="instance-help" className="text-xs text-muted-foreground">
                 {configured === undefined
                   ? 'Enter the server address provided by your workspace administrator.'
                   : `Currently connected to ${configured}.`}
               </p>
             ) : (
-              <p role="alert" className="text-xs text-destructive">
+              <p id="instance-help" role="alert" className="text-xs text-destructive">
                 {error}
               </p>
             )}

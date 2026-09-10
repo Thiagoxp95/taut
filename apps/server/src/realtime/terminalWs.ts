@@ -426,6 +426,8 @@ export class TerminalWsServer extends Effect.Service<TerminalWsServer>()('Termin
                 )
               case 'resize':
                 return pty?.resize(frame.right.cols, frame.right.rows) ?? Effect.void
+              case 'selectTab':
+                return live?.selectTab(frame.right.tabId) ?? Effect.void
               case 'viewport':
                 return live?.resize(frame.right) ?? Effect.void
               case 'input': {

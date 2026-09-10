@@ -106,7 +106,7 @@ describe('codex (untested beyond detect)', () => {
   })
 })
 
-describe('cursor (untested beyond detect)', () => {
+describe('cursor', () => {
   it('builds cursor-agent -p stream-json with the prompt in argv', () => {
     const built = cursor.buildCommand({
       ...base,
@@ -126,9 +126,16 @@ describe('cursor (untested beyond detect)', () => {
       'chat_1',
       'hello'
     ])
-    expect(built.env).toEqual({ CURSOR_API_KEY: 'cur-key' })
+    expect(built.env).toEqual({
+      CURSOR_API_KEY: 'cur-key',
+      AGENT_CLI_CREDENTIAL_STORE: 'memory'
+    })
     expect(cursor.buildCommand({ ...base, permissionMode: 'plan' }).cmd).toContain('plan')
     expect(built.cmd).not.toContain('--approve-mcps')
+  })
+
+  it('keeps host-login credential discovery enabled without an injected API key', () => {
+    expect(cursor.buildCommand({ ...base, credential: { kind: 'host-login' } }).env).toEqual({})
   })
 
   it('adds --approve-mcps when MCP servers are configured (allow-list lives in .cursor/cli.json)', () => {

@@ -42,6 +42,8 @@ export interface DesktopNotification {
 }
 
 export interface TautBridge {
+  /** Open the shell's server picker. Optional for older shells; absent in huddle windows. */
+  readonly changeServer?: () => void
   /** Optional for older shells and intentionally absent in huddle windows. */
   readonly updates?: DesktopUpdateBridge
   /** `process.platform` of the shell — `darwin`, `win32`, `linux`. */

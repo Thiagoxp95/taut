@@ -28,6 +28,8 @@ export function connectBrowserPreview(
   let disposed = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let delay = 1000
+  let failures = 0
+  let firstFrameTimer: ReturnType<typeof setTimeout> | undefined
   let disconnect = () => {}
 
   const retry = () => {
@@ -37,6 +39,23 @@ export function connectBrowserPreview(
       connect()
     }, delay)
     delay = Math.min(delay * 2, 10_000)
+  }
+  const unavailable = (reason: string, terminal = false) => {
+    if (firstFrameTimer !== undefined) clearTimeout(firstFrameTimer)
+    firstFrameTimer = undefined
+    // Keep short startup races in the loading state. Persistent failures remain
+    // visible with their reason and can also be retried explicitly by the viewer.
+    if (timer === undefined) failures++
+    receive({ _tag: 'control', holder: null, paused: false, owned: false })
+    receive(
+      terminal || failures >= 3
+        ? { _tag: 'browser', state: 'unavailable', reason }
+        : { _tag: 'browser', state: 'starting' }
+    )
+    if (terminal) {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = undefined
+    } else retry()
   }
   const connect = () => {
     disconnect()
@@ -50,32 +69,42 @@ export function connectBrowserPreview(
       socket.on('control', receive),
       socket.on('error', receive),
       socket.on('browser', (frame) => {
+        if (frame.state === 'unavailable') {
+          unavailable(frame.reason ?? 'The browser connection was lost.')
+          return
+        }
         receive(frame)
-        if (frame.state === 'live' && viewport) socket.send({ _tag: 'viewport', ...viewport })
-        if (frame.state === 'unavailable') retry()
-        if (frame.state === 'off' && timer !== undefined) {
-          clearTimeout(timer)
+        if (frame.state === 'live') {
+          if (viewport) socket.send({ _tag: 'viewport', ...viewport })
+        }
+        if (frame.state === 'off') {
+          if (timer !== undefined) clearTimeout(timer)
           timer = undefined
+          if (firstFrameTimer !== undefined) clearTimeout(firstFrameTimer)
+          firstFrameTimer = undefined
         }
       }),
       socket.on('frame', (frame) => {
         delay = 1000
+        failures = 0
+        if (firstFrameTimer !== undefined) clearTimeout(firstFrameTimer)
+        firstFrameTimer = undefined
         if (timer !== undefined) clearTimeout(timer)
         timer = undefined
         receive(frame)
       }),
       socket.onState((state, closed) => {
         if (state !== 'closed') return
-        receive({
-          _tag: 'browser',
-          state: 'unavailable',
-          reason: closed?.reason || 'The browser connection was lost.'
-        })
-        // Authentication/authorization failures need user action, not a retry loop.
-        if (closed?.code !== 4401 && closed?.code !== 4403) retry()
+        unavailable(
+          closed?.reason || 'The browser connection was lost.',
+          closed?.code === 4401 || closed?.code === 4403
+        )
       })
     ]
+    firstFrameTimer = setTimeout(() => unavailable('The browser did not send a picture.'), 30_000)
     disconnect = () => {
+      if (firstFrameTimer !== undefined) clearTimeout(firstFrameTimer)
+      firstFrameTimer = undefined
       off.forEach((unsubscribe) => unsubscribe())
       current = undefined
       socket.close()

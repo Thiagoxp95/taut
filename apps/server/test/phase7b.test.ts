@@ -18,13 +18,23 @@ import type {
 } from '@taut/contract/domain'
 import type { AgentId, MessageId, TaskId } from '@taut/contract/ids'
 import { Duration, Effect, Option, Redacted, Schema } from 'effect'
-import { afterAll, describe, expect } from 'vitest'
+import { afterAll, describe, expect, vi } from 'vitest'
 import { TaskRunner } from '../src/agents/runTask.js'
 import { Scheduler } from '../src/agents/scheduler.js'
 import { Messages } from '../src/services/messages.js'
 import { baseUrl, makeClient, type TestClient } from './_client.js'
 import { makeFakeRuntime } from './_fakeRuntime.js'
 import { makeTempDir, removeDir, testAppWith } from './_harness.js'
+
+// Keep the task/config integration real; only replace the OS browser launch.
+// Real Chromium startup and concurrent first use are covered in runtime tests.
+vi.mock('@taut/runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@taut/runtime')>()
+  return {
+    ...actual,
+    ensureLocalBrowserDaemon: () => Effect.succeed({ state: 'started' as const, port: 19333 })
+  }
+})
 
 const dir = makeTempDir()
 afterAll(() => removeDir(dir))
@@ -282,15 +292,17 @@ describe('phase 7b (browser MCP wiring Â· agent-runtime vault_list / vault_get Â
           const mcp = mcpConfigOf(task.id)
           expect(mcp.servers).toEqual(['taut', 'browser'])
           const browser = need(mcp.browser, 'browser server')
-          // Fake provider is `local`: node + @playwright/mcp's cli.js, profile under the agent home.
-          expect(browser.command).toBe('node')
-          expect(browser.args[0]).toMatch(/@playwright[\\/]mcp[\\/]cli\.js$/)
-          expect(browser.args).toContain('--headless')
-          expect(browser.args).not.toContain('--no-sandbox')
+          // The very first task attaches to the shared daemon, including target
+          // telemetry, before any viewer has opened the pane.
           const home = exec.cwd?.replace(/\/work\/[^/]+$/, '') ?? ''
           expect(home.length).toBeGreaterThan(0)
-          expect(browser.args).toContain(`${home}/.taut/browser/profile`)
+          expect(browser.command).toBe('node')
+          expect(browser.args[0]).toBe(`${home}/.taut/browser/mcp-bridge.cjs`)
+          expect(browser.args[1]).toMatch(/@playwright[\\/]mcp[\\/]cli\.js$/)
+          expect(browser.args).toContain('http://127.0.0.1:19333')
+          expect(browser.args).not.toContain('--headless')
           expect(browser.args).toContain(`${home}/.taut/browser/out`)
+          expect(browser.args).toContain(`${home}/.taut/browser/active-target`)
           expect(browser.env?.['PLAYWRIGHT_BROWSERS_PATH']).toBeDefined()
 
           const claudeMd = claudeMdOf(task.threadId)

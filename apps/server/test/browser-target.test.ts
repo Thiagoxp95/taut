@@ -46,3 +46,55 @@ it('follows the tool-selected target even when a different tab is visible, inclu
     await cdp.close()
   }
 })
+
+it('lets a viewer inspect another tab, keeps it through agent activity, and resumes following', async () => {
+  const cdp = await startFakeCdp()
+  const home = mkdtempSync(join(tmpdir(), 'taut-select-'))
+  dirs.push(home)
+  mkdirSync(join(home, '.taut/browser'), { recursive: true })
+  writeFileSync(join(home, '.taut/browser/active-target'), 'page-1')
+  cdp.createPage('other', 'Other', 'https://other.example/')
+  const machine = {
+    spec: { agentId: 'agent' },
+    paths: { hostHome: home },
+    openTunnel: () =>
+      Effect.acquireRelease(
+        Effect.sync(() => cdp.tunnel()),
+        (socket) => Effect.sync(() => socket.destroy())
+      )
+  } as unknown as Machine
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* openBrowserSession(machine, { port: cdp.port })
+          yield* Stream.runHead(session.tabs)
+          yield* session.selectTab('other')
+          expect(yield* Stream.runHead(session.tabs)).toMatchObject({
+            value: { activeTabId: 'other' }
+          })
+          cdp.updatePage('page-1', 'Agent navigation', 'https://example.com/next')
+          yield* Effect.sleep('350 millis')
+          expect(yield* Stream.runHead(session.tabs)).toMatchObject({
+            value: { activeTabId: 'other' }
+          })
+          yield* session.selectTab(null)
+          expect(yield* Stream.runHead(session.tabs)).toMatchObject({
+            value: { activeTabId: 'page-1' }
+          })
+          yield* session.selectTab('missing')
+          yield* session.selectTab('other')
+          cdp.closePage('other')
+          const fallback = yield* Stream.filter(
+            session.tabs,
+            (frame) => frame.activeTabId === 'page-1'
+          ).pipe(Stream.runHead, Effect.timeout('2 seconds'))
+          expect(fallback).toMatchObject({ value: { activeTabId: 'page-1' } })
+          expect(cdp.calls.some((call) => call.method === 'Target.activateTarget')).toBe(false)
+        })
+      )
+    )
+  } finally {
+    await cdp.close()
+  }
+})

@@ -29,6 +29,34 @@ try {
     space.bottomGap < 2 && space.widthGap < 2,
     `Page should fill available space: ${JSON.stringify(space)}`
   )
+  await page.evaluate(() =>
+    window.browserFixture.sockets[0].emit({
+      _tag: 'tabs',
+      tabs: [
+        { id: 'blank', title: 'New tab', url: 'about:blank' },
+        { id: 'page', title: 'Example', url: 'https://example.test/' }
+      ],
+      activeTabId: 'blank'
+    })
+  )
+  await page.getByRole('button', { name: 'Example', exact: true }).click({ timeout: 2000 })
+  assert.ok(
+    await page.evaluate(() =>
+      window.browserFixture.inputs.some(
+        (frame) => frame._tag === 'selectTab' && frame.tabId === 'page'
+      )
+    ),
+    'Clicking a tab selects that preview page'
+  )
+  await page.getByRole('button', { name: 'Follow agent', exact: true }).click()
+  assert.ok(
+    await page.evaluate(() =>
+      window.browserFixture.inputs.some(
+        (frame) => frame._tag === 'selectTab' && frame.tabId === null
+      )
+    ),
+    'Follow agent resumes automatic selection'
+  )
   await page.getByRole('textbox', { name: 'Reply' }).fill('Keep my draft')
   await page.evaluate(() => window.browserFixture.end())
   await page.waitForTimeout(100)
@@ -144,7 +172,7 @@ try {
     'PASS pause interlock, keyboard escape, wheel input, ownership, automatic recovery, dismissal, reopening, conversation scope'
   )
   console.log(
-    'PASS persistent pane, follow-up socket reuse, draft preservation, take/release control'
+    'PASS tab selection, resume following, persistent pane, follow-up socket reuse, draft preservation, take/release control'
   )
 } finally {
   await browser.close()

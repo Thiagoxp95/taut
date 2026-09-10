@@ -286,7 +286,7 @@ export class AppConfig extends Effect.Service<AppConfig>()('AppConfig', {
 
     /**
      * D3: set together or not at all, exactly like `vapid` below. `Calls` reports
-     * `{ enabled: false }` when this is `undefined` and the UI hides every huddle.
+     * `{ enabled: false }` when this is `undefined` and the UI explains the missing setup.
      */
     const livekit =
       livekitUrl !== undefined && livekitApiKey !== undefined && livekitApiSecret !== undefined

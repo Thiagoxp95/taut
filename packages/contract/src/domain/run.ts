@@ -23,7 +23,9 @@ export class RunOverride extends Schema.Class<RunOverride>('RunOverride')({
   /** Overrides `Agent.model ?? Subscription.defaultModel`. */
   model: Schema.optional(Schema.String),
   /** Override-only; there is no agent-level counterpart today (D4). */
-  reasoningEffort: Schema.optional(ReasoningEffort)
+  reasoningEffort: Schema.optional(ReasoningEffort),
+  /** Codex speed preference; absent inherits the seat, false requests standard processing. */
+  fastMode: Schema.optional(Schema.Boolean)
 }) {}
 
 /** One row of the model dropdown. A struct, not a class: it is data the server builds by the hundred. */

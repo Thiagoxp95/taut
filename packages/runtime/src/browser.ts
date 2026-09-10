@@ -34,7 +34,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { get as httpGet } from 'node:http'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
 
 import type { BinaryMissing, Machine, MachineUnavailable } from './machine/types.js'
@@ -220,7 +220,10 @@ export const browserMcpSpec = (o: BrowserMcpSpecOptions): BrowserMcpSpec => {
       return {
         command: 'node',
         args: [browserMcpCliPath(), ...commonArgs(o.homeDir), ...localSandboxArgs()],
-        env: { PLAYWRIGHT_BROWSERS_PATH: hostPlaywrightBrowsersPath() }
+        env: {
+          PLAYWRIGHT_BROWSERS_PATH: hostPlaywrightBrowsersPath(),
+          TMPDIR: process.platform === 'win32' ? tmpdir() : '/tmp'
+        }
       }
   }
 }
@@ -447,6 +450,8 @@ export interface LocalBrowserDaemon {
   readonly port: number
 }
 
+const localBrowserStarts = new Map<string, Promise<LocalBrowserDaemon>>()
+
 /**
  * Make sure one headless Chromium is listening on the host for this agent, on its own
  * profile, and say whether it already was (`running`) or was just `started`. The
@@ -467,55 +472,84 @@ export const ensureLocalBrowserDaemon = (
 ): Effect.Effect<LocalBrowserDaemon, ExecFailed | BinaryMissing | MachineUnavailable> =>
   Effect.tryPromise({
     try: async (): Promise<LocalBrowserDaemon> => {
-      const portFile = localBrowserPortFile(options.homeDir)
-      // `options.port` is only ever passed by a test; the daemon picks its own.
-      const known = options.port ?? readPortFile(portFile)
-      if (known !== null && (await isTautBrowser(known))) return { state: 'running', port: known }
+      const pending = localBrowserStarts.get(options.homeDir)
+      if (pending) return pending
+      const start = startLocalBrowser()
+      localBrowserStarts.set(options.homeDir, start)
+      try {
+        return await start
+      } finally {
+        localBrowserStarts.delete(options.homeDir)
+      }
 
-      const binary =
-        options.executable === undefined ? hostChromiumExecutable() : options.executable
-      if (binary === null || binary === undefined) {
+      async function startLocalBrowser(): Promise<LocalBrowserDaemon> {
+        const portFile = localBrowserPortFile(options.homeDir)
+        // `options.port` is only ever passed by a test; the daemon picks its own.
+        const known = options.port ?? readPortFile(portFile)
+        if (known !== null && (await isTautBrowser(known))) return { state: 'running', port: known }
+
+        const binary =
+          options.executable === undefined ? hostChromiumExecutable() : options.executable
+        if (binary === null || binary === undefined) {
+          throw new Error(
+            `no Chromium under ${hostPlaywrightBrowsersPath()} — run \`pnpm exec playwright install chromium\``
+          )
+        }
+        const port = known ?? (await freePort())
+        const profile = browserProfileDir(options.homeDir)
+        mkdirSync(profile, { recursive: true })
+        const child = spawn(
+          binary,
+          [
+            '--headless=new',
+            ...localSandboxArgs(),
+            '--disable-gpu',
+            '--disable-dev-shm-usage',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-background-networking',
+            '--window-size=1280,800',
+            `--remote-debugging-port=${port}`,
+            '--remote-debugging-address=127.0.0.1',
+            `--user-data-dir=${profile}`,
+            'about:blank'
+          ],
+          {
+            detached: true,
+            stdio: 'ignore',
+            // Chromium creates its own private socket directory here. Agent homes
+            // can exceed Unix socket path limits before that suffix is even added.
+            env: { ...process.env, TMPDIR: process.platform === 'win32' ? tmpdir() : '/tmp' }
+          }
+        )
+        let launchError: Error | undefined
+        child.once('error', (error) => {
+          launchError = error
+        })
+        child.unref()
+        const deadline = Date.now() + LOCAL_BROWSER_START_TIMEOUT_MS
+        while (Date.now() < deadline) {
+          if (await isTautBrowser(port)) {
+            writeFileSync(portFile, String(port), 'utf8')
+            return { state: 'started', port }
+          }
+          if (launchError) throw launchError
+          if (child.exitCode !== null || child.signalCode !== null) {
+            throw new Error(
+              `Chromium exited before opening its debug port (${child.signalCode ?? child.exitCode})`
+            )
+          }
+          await wait(100)
+        }
+        child.kill()
+        // The most likely cause by far: a task's own playwright-mcp already holds this
+        // profile, and Chromium will not open one twice.
         throw new Error(
-          `no Chromium under ${hostPlaywrightBrowsersPath()} — run \`pnpm exec playwright install chromium\``
+          existsSync(join(profile, 'SingletonLock'))
+            ? "the agent's own browser is using this profile right now — the live view can attach once that task finishes"
+            : `Chromium did not open 127.0.0.1:${port} within 20s`
         )
       }
-      const port = known ?? (await freePort())
-      const profile = browserProfileDir(options.homeDir)
-      mkdirSync(profile, { recursive: true })
-      const child = spawn(
-        binary,
-        [
-          '--headless=new',
-          ...localSandboxArgs(),
-          '--disable-gpu',
-          '--disable-dev-shm-usage',
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--disable-background-networking',
-          '--window-size=1280,800',
-          `--remote-debugging-port=${port}`,
-          '--remote-debugging-address=127.0.0.1',
-          `--user-data-dir=${profile}`,
-          'about:blank'
-        ],
-        { detached: true, stdio: 'ignore' }
-      )
-      child.unref()
-      const deadline = Date.now() + LOCAL_BROWSER_START_TIMEOUT_MS
-      while (Date.now() < deadline) {
-        if (await isTautBrowser(port)) {
-          writeFileSync(portFile, String(port), 'utf8')
-          return { state: 'started', port }
-        }
-        await wait(100)
-      }
-      // The most likely cause by far: a task's own playwright-mcp already holds this
-      // profile, and Chromium will not open one twice.
-      throw new Error(
-        existsSync(join(profile, 'SingletonLock'))
-          ? "the agent's own browser is using this profile right now — the live view can attach once that task finishes"
-          : `Chromium did not open 127.0.0.1:${port} within 20s`
-      )
     },
     catch: (cause) =>
       new ExecFailed({
@@ -528,11 +562,8 @@ export const ensureLocalBrowserDaemon = (
 
 /**
  * The `--cdp-endpoint` for an agent whose Taut-started Chromium is **already** up on
- * this host, or `undefined`. The task runner asks this instead of starting one: a
- * task must not wait on a browser launch, and on `local` playwright-mcp launching its
- * own is the long-standing behaviour. Once the owner has opened the live view once,
- * the port is on file and every later task shares that browser — same profile, same
- * logins, and the live view keeps working while the agent drives.
+ * this host, or `undefined`. This only probes; tasks and live views both use
+ * `ensureLocalBrowserDaemon` so their first launch already shares one browser.
  */
 export const localBrowserEndpoint = (homeDir: string): Effect.Effect<string | undefined> =>
   Effect.promise(async () => {

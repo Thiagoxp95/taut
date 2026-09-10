@@ -26,7 +26,8 @@ export const isEmptyOverride = (override: RunOverride | undefined): boolean =>
   (override.runtimeKind === undefined &&
     override.subscriptionId === undefined &&
     override.model === undefined &&
-    override.reasoningEffort === undefined)
+    override.reasoningEffort === undefined &&
+    override.fastMode === undefined)
 
 /** How many rows the popup is holding — what the button's dot counts. */
 export const overrideCount = (override: RunOverride | undefined): number =>
@@ -36,7 +37,8 @@ export const overrideCount = (override: RunOverride | undefined): number =>
         override.runtimeKind,
         override.subscriptionId,
         override.model,
-        override.reasoningEffort
+        override.reasoningEffort,
+        override.fastMode
       ].filter((field) => field !== undefined).length
 
 const read = (key: string): RunOverride | undefined => {

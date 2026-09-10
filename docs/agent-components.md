@@ -47,6 +47,10 @@ The timer starts when the tool is called. Its countdown ring uses an absolute se
 
 Timers accept 1 second through 7 days. The existing signal scheduler checks every five seconds by default, and ordinary agent availability and queue limits still apply. The display says the follow-up is due at zero; it does not claim the action has executed. The browser never triggers the action, so closing it has no effect on delivery. `cancel_signal` can cancel the returned signal; there are no pause/restart controls in this initial component.
 
+Send `durationSeconds` as a whole JSON number (`300` for five minutes). The MCP boundary also normalizes decimal numeric strings such as `"300"` and `"300.0"` before applying the same integer and range validation; the HTTP API still receives a number. Empty strings, fractions, units, and non-decimal formats are rejected.
+
+Agents confirm a timer only after a successful result with `signalId` and `endsAt`. A validation failure permits one correction of the indicated arguments; repeated failure should produce a short explanation that the timer could not be created, without schema traces or an unverified diagnosis. An uncertain network result requires checking `list_signals` before retrying to avoid duplicates. Unsupported component behavior should be explained plainly with a supported alternative when available.
+
 ## Informational cards
 
 `render_component({"kind":"card","title":"Next steps","body":"1. Start a focused block.\n2. Review the result."})` renders a themed Markdown card. These components use trusted application renderers; tool input cannot execute JavaScript in the application.

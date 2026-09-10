@@ -89,7 +89,8 @@ describe('TautApi', () => {
       'react',
       'unreact',
       'authorization',
-      'decideAuthorization'
+      'decideAuthorization',
+      'answerComponent'
     ])
     expect(endpointNames('attachments')).toEqual(['upload', 'get', 'content'])
     expect(endpointNames('vault')).toEqual(['list', 'add', 'revoke'])

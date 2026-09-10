@@ -168,7 +168,7 @@ describe('runCli', () => {
   it('describe --json lists every tool with schemas', async () => {
     const { stdout } = await run(['describe', '--json'])
     const described = JSON.parse(stdout) as Array<{ name: string; inputSchema: { type: string } }>
-    expect(described.map((t) => t.name)).toEqual([...ToolNames])
+    expect(described.map((t) => t.name).sort()).toEqual([...ToolNames].sort())
     expect(described.every((t) => t.inputSchema.type === 'object')).toBe(true)
   })
 

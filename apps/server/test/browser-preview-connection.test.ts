@@ -69,3 +69,56 @@ it('does not retry authorization failures', () => {
   expect(sockets).toHaveLength(1)
   connection.close()
 })
+
+it('keeps transient first-launch failures in connecting state and recovers a live socket with no picture', () => {
+  vi.useFakeTimers()
+  const sockets: ReturnType<typeof makeSocket>[] = []
+  const frames: TerminalServerFrame[] = []
+  const connection = connectBrowserPreview(
+    () => {
+      const socket = makeSocket()
+      sockets.push(socket)
+      return socket
+    },
+    (frame) => frames.push(frame)
+  )
+  sockets[0]!.emit('browser', { _tag: 'browser', state: 'unavailable', reason: 'Starting up' })
+  expect(frames.at(-1)).toMatchObject({ _tag: 'browser', state: 'starting' })
+  vi.advanceTimersByTime(1000)
+  sockets[1]!.emit('browser', { _tag: 'browser', state: 'live' })
+  vi.advanceTimersByTime(35000)
+  expect(sockets.length).toBeGreaterThan(2)
+  sockets.at(-1)!.emit('frame', { _tag: 'frame', data: 'page', width: 10, height: 10 })
+  const connected = sockets.length
+  vi.advanceTimersByTime(60000)
+  expect(sockets).toHaveLength(connected)
+  connection.close()
+})
+
+it('shows persistent failures and cancels an already scheduled retry when authorization is refused', () => {
+  vi.useFakeTimers()
+  const sockets: ReturnType<typeof makeSocket>[] = []
+  const frames: TerminalServerFrame[] = []
+  const connection = connectBrowserPreview(
+    () => {
+      const socket = makeSocket()
+      sockets.push(socket)
+      return socket
+    },
+    (frame) => frames.push(frame)
+  )
+  for (const delay of [1000, 2000]) {
+    sockets
+      .at(-1)!
+      .emit('browser', { _tag: 'browser', state: 'unavailable', reason: 'Cannot launch' })
+    vi.advanceTimersByTime(delay)
+  }
+  sockets
+    .at(-1)!
+    .emit('browser', { _tag: 'browser', state: 'unavailable', reason: 'Cannot launch' })
+  expect(frames.at(-1)).toMatchObject({ state: 'unavailable', reason: 'Cannot launch' })
+  sockets.at(-1)!.disconnect(4403)
+  vi.advanceTimersByTime(60000)
+  expect(sockets).toHaveLength(3)
+  connection.close()
+})

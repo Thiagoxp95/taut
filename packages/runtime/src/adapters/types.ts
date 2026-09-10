@@ -206,6 +206,8 @@ export interface BuildCommandInput {
    * | codex       | `-c model_reasoning_effort="<effort>"`          |
    */
   readonly reasoningEffort?: ReasoningEffort
+  /** Codex only: request fast or standard processing; absent inherits the runtime default. */
+  readonly fastMode?: boolean
   readonly credential?: RuntimeCredential
   readonly resumeSessionId?: string
   readonly mcp?: McpOptions

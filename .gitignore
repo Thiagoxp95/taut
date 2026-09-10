@@ -21,7 +21,8 @@ data/
 
 # misc
 .DS_Store
-*.log*
+*.log
+*.log.[0-9]*
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json

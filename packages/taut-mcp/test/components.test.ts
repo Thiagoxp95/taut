@@ -60,6 +60,62 @@ describe('shared component tools', () => {
     )
     expect(fake.requests).toHaveLength(0)
   })
+  it.each([300, '300', '300.0'])(
+    'starts a five-minute timer when the agent supplies durationSeconds=%j',
+    async (durationSeconds) => {
+      fake.failNext = {
+        status: 200,
+        body: {
+          messageId: 'msg_timer',
+          signalId: 'sig_timer',
+          endsAt: '2026-09-10T19:05:00.000Z'
+        }
+      }
+      const result = await call('render_component', {
+        kind: 'timer',
+        title: 'Five-minute timer',
+        durationSeconds,
+        onComplete: 'Tell the user the five minutes are up.'
+      })
+      expect(result.isError, JSON.stringify(result.content)).toBeFalsy()
+      expect(result.structuredContent).toMatchObject({
+        messageId: 'msg_timer',
+        signalId: 'sig_timer',
+        endsAt: '2026-09-10T19:05:00.000Z'
+      })
+      expect(fake.requests).toHaveLength(1)
+      expect(fake.requests[0]?.body).toEqual({
+        kind: 'timer',
+        title: 'Five-minute timer',
+        durationSeconds: 300,
+        onComplete: 'Tell the user the five minutes are up.'
+      })
+    }
+  )
+  it.each([
+    '',
+    ' ',
+    '0',
+    '-1',
+    '300.5',
+    '604801',
+    'Infinity',
+    'NaN',
+    '0x12',
+    '300s',
+    true,
+    null,
+    [300]
+  ])('rejects invalid timer duration %j without scheduling anything', async (durationSeconds) => {
+    const result = await call('render_component', {
+      kind: 'timer',
+      title: 'Invalid timer',
+      durationSeconds,
+      onComplete: 'Check in'
+    })
+    expect(result.isError).toBe(true)
+    expect(fake.requests).toHaveLength(0)
+  })
   it('posts structured questions and parks through the existing ask protocol', async () => {
     fake.failNext = {
       status: 200,

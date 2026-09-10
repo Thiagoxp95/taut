@@ -319,6 +319,7 @@ describe('workspace: browser live view + take control (D11, D12, D15, D16, D17)'
           })
         expect(yield* nextTabs('page-1')).toEqual({
           _tag: 'tabs',
+          following: true,
           activeTabId: 'page-1',
           tabs: [{ id: 'page-1', title: 'Example', url: 'https://example.com/' }]
         })
@@ -342,6 +343,7 @@ describe('workspace: browser live view + take control (D11, D12, D15, D16, D17)'
         cdp.createPage('search', 'Search', 'https://search.example/')
         expect(yield* nextTabs('search')).toEqual({
           _tag: 'tabs',
+          following: true,
           activeTabId: 'search',
           tabs: [
             { id: 'page-1', title: 'Example', url: 'https://example.com/' },
@@ -354,6 +356,12 @@ describe('workspace: browser live view + take control (D11, D12, D15, D16, D17)'
           frame = yield* Effect.promise(() => client.nextOf('frame'))
         }
         expect(unb64(frame.data)).toBe('search-page')
+
+        client.send({ _tag: 'selectTab', tabId: 'page-1' })
+        expect((yield* nextTabs('page-1')).following).toBe(false)
+        // A selection is local to the preview and does not need a control lease.
+        client.send({ _tag: 'selectTab', tabId: null })
+        expect((yield* nextTabs('search')).following).toBe(true)
 
         cdp.selectPage('page-1')
         expect((yield* nextTabs('page-1')).tabs[0]?.url).toBe('https://example.com/')

@@ -175,6 +175,7 @@ function ModelPickerPanel({
       state.set('runtimeKind', railRuntime === agent.runtimeKind ? undefined : railRuntime)
       state.set('subscriptionId', undefined)
       state.set('reasoningEffort', undefined)
+      state.set('fastMode', undefined)
     }
     state.set('model', id)
     onDone()
@@ -344,7 +345,13 @@ function TraitsControl({ agent, state, disabled }: RunControlsProps & { disabled
     override?.subscriptionId === undefined
       ? undefined
       : (seats.find((seat) => seat.id === override.subscriptionId)?.label ?? 'Pinned seat')
-  const label = [effort === undefined ? 'Auto' : REASONING_LABELS[effort], seatLabel]
+  const speedLabel =
+    runtime !== 'codex' || override?.fastMode === undefined
+      ? undefined
+      : override.fastMode
+        ? 'Fast'
+        : 'Standard'
+  const label = [effort === undefined ? 'Auto' : REASONING_LABELS[effort], speedLabel, seatLabel]
     .filter((part): part is string => part !== undefined)
     .join(' · ')
 
@@ -352,7 +359,7 @@ function TraitsControl({ agent, state, disabled }: RunControlsProps & { disabled
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <ComposerControl
-          aria-label={`Reasoning and seat for @${agent.handle}`}
+          aria-label={`${runtime === 'codex' ? 'Reasoning, speed and seat' : 'Reasoning and seat'} for @${agent.handle}`}
           disabled={disabled}
           onMouseDown={(event) => event.preventDefault()}
           className="shrink-0"
@@ -393,6 +400,29 @@ function TraitsControl({ agent, state, disabled }: RunControlsProps & { disabled
         )}
 
         <DropdownMenuSeparator />
+
+        {runtime === 'codex' ? (
+          <>
+            <GroupLabel>Speed</GroupLabel>
+            <DropdownMenuRadioGroup
+              value={
+                override?.fastMode === undefined ? NONE : override.fastMode ? 'fast' : 'standard'
+              }
+              onValueChange={(next) =>
+                state.set('fastMode', next === NONE ? undefined : next === 'fast')
+              }
+            >
+              <TraitItem value={NONE} label="Seat default" isDefault />
+              <TraitItem value="standard" label="Standard" />
+              <TraitItem
+                value="fast"
+                label="Fast"
+                description="Faster responses with higher usage or cost."
+              />
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
 
         <GroupLabel>Seat</GroupLabel>
         <DropdownMenuRadioGroup

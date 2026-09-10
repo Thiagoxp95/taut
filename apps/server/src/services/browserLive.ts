@@ -66,6 +66,8 @@ export interface BrowserSession {
   readonly dispatch: (event: BrowserInputEvent) => Effect.Effect<void>
   /** Reflow the current page to the viewer's available space; retained across tab changes. */
   readonly resize: (size: BrowserViewport) => Effect.Effect<void>
+  /** Observe a page without changing browser focus; null resumes following the agent. */
+  readonly selectTab: (tabId: string | null) => Effect.Effect<void>
   /** Settles when the CDP socket is gone (Chromium exited, box stopped). */
   readonly closed: Effect.Effect<void>
 }
@@ -295,6 +297,7 @@ export const openBrowserSession = (
     yield* Effect.addFinalizer(() => Queue.shutdown(tabs))
     const pages = new Map<string, TargetInfo>()
     let agentTarget: string | undefined
+    let viewerTarget: string | undefined
     const readAgentTarget = async () => {
       try {
         return (
@@ -332,6 +335,7 @@ export const openBrowserSession = (
     const publishTabs = () =>
       Queue.unsafeOffer(tabs, {
         _tag: 'tabs',
+        following: viewerTarget === undefined,
         tabs: [...pages.values()].map(({ targetId, title, url }) => ({
           id: targetId,
           title: title ?? '',
@@ -425,8 +429,15 @@ export const openBrowserSession = (
       switching = switching
         .then(async () => {
           const id =
-            agentTarget && pages.has(agentTarget) ? agentTarget : (targetId ?? (await pickPage()))
-          if (current?.targetId === id) return
+            viewerTarget && pages.has(viewerTarget)
+              ? viewerTarget
+              : agentTarget && pages.has(agentTarget)
+                ? agentTarget
+                : (targetId ?? (await pickPage()))
+          if (current?.targetId === id) {
+            publishTabs()
+            return
+          }
           if (current !== undefined) {
             await call('Target.detachFromTarget', { sessionId: current.sessionId }).catch(() => {})
             current = undefined
@@ -517,6 +528,7 @@ export const openBrowserSession = (
         }
         case 'Target.targetDestroyed': {
           pages.delete(String(event.params['targetId']))
+          if (viewerTarget === event.params['targetId']) viewerTarget = undefined
           if (event.params['targetId'] === current?.targetId) {
             current = undefined
             switchTo(undefined)
@@ -612,7 +624,17 @@ export const openBrowserSession = (
         await switching
       })
 
+    const selectTab = (tabId: string | null): Effect.Effect<void> =>
+      Effect.promise(async () => {
+        if (tabId !== null && !pages.has(tabId)) return
+        viewerTarget = tabId ?? undefined
+        if (tabId === null) agentTarget = await readAgentTarget()
+        switchTo(tabId ?? undefined)
+        await switching
+      })
+
     return {
+      selectTab,
       resize,
       frames: Stream.fromQueue(frames).pipe(Stream.takeWhile((frame) => frame !== END)),
       tabs: Stream.fromQueue(tabs).pipe(Stream.interruptWhen(Deferred.await(closed))),

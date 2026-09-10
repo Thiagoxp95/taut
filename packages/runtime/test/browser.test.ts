@@ -95,7 +95,10 @@ describe('browserMcpSpec', () => {
       '/data/acme/agents/bruno/home/.taut/browser/out'
     ])
     expect(spec.args).not.toContain('--no-sandbox')
-    expect(spec.env).toEqual({ PLAYWRIGHT_BROWSERS_PATH: hostPlaywrightBrowsersPath() })
+    expect(spec.env).toMatchObject({
+      PLAYWRIGHT_BROWSERS_PATH: hostPlaywrightBrowsersPath(),
+      TMPDIR: expect.any(String)
+    })
   })
 
   it('hostPlaywrightBrowsersPath mirrors playwright-core defaults and honours the env override', () => {

@@ -158,6 +158,14 @@ it.skipIf(!existsSync(chromium.executablePath()))(
       await Effect.runPromise(live.resize({ width: 780, height: 950 }))
       expect(await second.evaluate('[window.innerWidth, window.innerHeight]')).toEqual([780, 950])
       expect(await call('browser_tabs', { action: 'select', index: firstIndex })).toBe(ids[0])
+      const beforeSelection = frameCount
+      await Effect.runPromise(live.selectTab(ids[1]))
+      await expect.poll(() => viewedTarget).toBe(ids[1])
+      await expect.poll(() => frameCount).toBeGreaterThan(beforeSelection)
+      // Inspecting a tab does not change the MCP's selection.
+      expect(readFileSync(join(home, BROWSER_PATHS.activeTarget), 'utf8')).toBe(ids[0])
+      await Effect.runPromise(live.selectTab(null))
+      await expect.poll(() => viewedTarget).toBe(ids[0])
       expect(await call('browser_take_screenshot', { type: 'png' })).toBe(ids[0])
       await expect.poll(() => frameCount).toBeGreaterThan(0)
       expect(await call('browser_tabs', { action: 'close', index: firstIndex })).toBe(ids[1])

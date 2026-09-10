@@ -35,6 +35,7 @@ class PreviewWebSocket {
     }, 50)
   }
   emit(frame) {
+    if (frame._tag === 'tabs') this.tabs = frame
     this.onmessage?.({ data: JSON.stringify(frame) })
   }
   page(title, url) {
@@ -45,6 +46,15 @@ class PreviewWebSocket {
   send(value) {
     const frame = JSON.parse(value)
     inputs.push(frame)
+    if (frame._tag === 'selectTab') {
+      this.emit({ ...this.tabs, activeTabId: frame.tabId ?? 'page' })
+      this.emit({
+        _tag: 'frame',
+        data: canvas.toDataURL('image/jpeg').split(',')[1],
+        width: canvas.width,
+        height: canvas.height
+      })
+    }
     if (frame._tag === 'viewport') {
       canvas.width = frame.width
       canvas.height = frame.height

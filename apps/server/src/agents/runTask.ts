@@ -61,8 +61,8 @@ import {
   browserMcpBridgeSource,
   browserPromptLine,
   ensureBrowserDaemon,
+  ensureLocalBrowserDaemon,
   gitCredentialEnv,
-  localBrowserEndpoint,
   makeRedactor,
   opencodePermission,
   prepareRepos,
@@ -1258,6 +1258,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
                 model: override.model ?? configured.model
               })
         const reasoningEffort = override?.reasoningEffort
+        const fastMode = agent.runtimeKind === 'codex' ? override?.fastMode : undefined
 
         yield* publisher.transact(companyId, (emit) =>
           Effect.gen(function* () {
@@ -1358,10 +1359,21 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
               cdpEndpoint = browserCdpEndpoint()
             }
           } else {
-            // No launch on the task path: attach only if the agent's Chromium is
-            // already up (the live view started it), otherwise playwright-mcp
-            // launches its own as it always has.
-            cdpEndpoint = yield* localBrowserEndpoint(machine.paths.home)
+            // The task and preview must share a CDP browser from the first run.
+            // A self-launched MCP browser locks the profile without a debug port.
+            const started = yield* Effect.either(
+              ensureLocalBrowserDaemon({
+                agentId: agent.id,
+                homeDir: machine.paths.home
+              })
+            )
+            if (Either.isLeft(started)) {
+              yield* Effect.logWarning(
+                `browser: cannot start local chromium: ${started.left.message}`
+              )
+            } else {
+              cdpEndpoint = browserCdpEndpoint(started.right.port)
+            }
           }
         }
         const mcp = yield* writeMcpConfig(
@@ -1422,6 +1434,7 @@ export class TaskRunner extends Effect.Service<TaskRunner>()('TaskRunner', {
               ? { model: agent.model ?? seat.subscription?.defaultModel }
               : {}),
             ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+            ...(fastMode === undefined ? {} : { fastMode }),
             credential: seat.credential,
             ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
             // Only claude-code reads `configPath`; the allow-list is `['mcp__taut__*']`, plus

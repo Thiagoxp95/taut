@@ -2376,3 +2376,12 @@ built-in-list note, picking one moves the trigger to the OpenAI mark and resets 
 the search box takes focus on open (typing "haiku" narrows to Claude Haiku 4.5, Enter selects it),
 `Agent default` puts everything back, and the thread composer at ~340px still fits both controls
 and Send. `pnpm typecheck` and `pnpm lint` clean for `@taut/web`.
+
+## v1.0.2 — 2026-09-10
+
+- Browser previews now share the agent’s browser from the first task, recover from startup failures, and use short temporary paths to avoid Chromium socket errors. Click a tab to inspect it, then select **Follow agent** to resume following.
+- Codex runs expose fast mode and discover models available to connected ChatGPT accounts. Cursor API-key runs and MCP permissions work with its current CLI.
+- The desktop login page shows the connected server and offers **Change server**.
+- Huddle controls explain missing server setup and connection failures. Agent timers accept numeric duration strings and give clearer validation feedback.
+
+The desktop client is version 1.0.2; browser and runtime fixes require updating the hosted server too.

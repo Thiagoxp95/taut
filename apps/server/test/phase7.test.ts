@@ -158,7 +158,13 @@ describe('phase 7 (browser access · agent vaults)', () => {
           expect(renamed.browserAccess).toBe(true)
           const detail = yield* bob.api.agents.get({ path: { agentId: mila.id } })
           expect(detail.agent.browserAccess).toBe(true)
-          expect(Object.keys(detail)).toEqual(['agent', 'skills', 'fileGrants', 'repoGrants'])
+          expect(Object.keys(detail)).toEqual([
+            'agent',
+            'skills',
+            'fileGrants',
+            'repoGrants',
+            'connectors'
+          ])
           const listed = yield* bob.api.agents.list({ urlParams: {} })
           expect(listed.items.map((a) => [a.handle, a.browserAccess])).toEqual([
             ['bruno', true],

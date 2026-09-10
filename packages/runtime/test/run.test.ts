@@ -39,6 +39,51 @@ describe('runTask redaction', () => {
   const apiKey = 'sk-ant-api03-TASKSECRET-0001'
   const late = 'vault-secret-value-9999'
 
+  it('reports redacted stderr when a CLI exits without a result', async () => {
+    const events = await Effect.runPromise(
+      Stream.runCollect(
+        runTask({
+          machine: fakeMachine([
+            { _tag: 'stderr', line: `Authentication failed for ${apiKey}` },
+            { _tag: 'exit', result: { exitCode: 1, durationMs: 5 } }
+          ]),
+          adapter: claudeCode,
+          command: { cmd: ['claude'], env: { ANTHROPIC_API_KEY: apiKey } },
+          cwd: '/x'
+        })
+      )
+    )
+    expect([...events].find((event) => event.type === 'error')).toMatchObject({
+      message: expect.stringContaining('Authentication failed for ••••0001')
+    })
+    expect(JSON.stringify([...events])).not.toContain(apiKey)
+  })
+
+  it('preserves a structured failure instead of replacing it with an exit error', async () => {
+    const events = await Effect.runPromise(
+      Stream.runCollect(
+        runTask({
+          machine: fakeMachine([
+            {
+              _tag: 'stdout',
+              line: JSON.stringify({ type: 'error', message: 'Unsupported model' })
+            },
+            { _tag: 'exit', result: { exitCode: 1, durationMs: 5 } }
+          ]),
+          adapter: {
+            ...claudeCode,
+            parseLine: () => [{ type: 'error', message: 'Unsupported model' }]
+          },
+          command: { cmd: ['claude'], env: {} },
+          cwd: '/x'
+        })
+      )
+    )
+    expect([...events].filter((event) => event.type === 'error')).toEqual([
+      { type: 'error', message: 'Unsupported model' }
+    ])
+  })
+
   it('uses the caller-owned redactor and add()s the command env secrets to it', async () => {
     const redactor = makeRedactor(['seat-secret-ABCDEF'])
     const stderr: Array<string> = []

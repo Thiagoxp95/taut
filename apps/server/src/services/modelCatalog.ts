@@ -21,6 +21,9 @@ import { bearerFrom } from './usageProbe.js'
 
 const ANTHROPIC_MODELS_URL = 'https://api.anthropic.com/v1/models?limit=100'
 const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models'
+// Codex CLI 0.154.0's authenticated discovery protocol, verified against the
+// backend. This version identifies the protocol client, not a model allow-list.
+const CODEX_MODELS_URL = 'https://chatgpt.com/backend-api/codex/models?client_version=0.154.0'
 /** OpenCode has no key of its own; models.dev is the catalogue it resolves against. */
 const MODELS_DEV_URL = 'https://models.dev/api.json'
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -43,9 +46,9 @@ export const FALLBACK_MODELS: Record<RuntimeKind, ReadonlyArray<ModelOption>> = 
     { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' }
   ],
   codex: [
-    { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
-    { id: 'gpt-5', label: 'GPT-5' },
-    { id: 'o4-mini', label: 'o4-mini' }
+    { id: 'gpt-6-astra', label: 'GPT-6-Astra' },
+    { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' },
+    { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna' }
   ],
   cursor: [
     { id: 'auto', label: 'Auto' },
@@ -122,6 +125,17 @@ const OpenAiModels = Schema.Struct({
   data: Schema.Array(Schema.Struct({ id: Schema.String }))
 })
 
+const CodexModels = Schema.Struct({
+  models: Schema.Array(
+    Schema.Struct({
+      slug: Schema.String,
+      display_name: Schema.optional(Schema.String),
+      visibility: Schema.String,
+      priority: Schema.optional(Schema.Number)
+    })
+  )
+})
+
 /**
  * models.dev keys providers, then models, and every model carries far more than
  * a name. Only the fields the dropdown and the context meter need are decoded;
@@ -149,7 +163,7 @@ const ModelsDev = Schema.Record({
  * deprecated chat models next to the ones `codex` can drive. Codex takes a
  * reasoning model, so that is what survives the filter.
  */
-const CODEX_MODEL = /^(gpt-5|gpt-4\.1|o[34])(-|$)/
+const CODEX_MODEL = /^(gpt-[5-9]\d*(?:\.\d+)?|gpt-4\.1|o[34])(-|$)/
 const CODEX_NOT_MODEL = /(audio|realtime|transcribe|tts|image|search|embedding|moderation)/
 
 const titleCase = (id: string): string =>
@@ -198,6 +212,7 @@ export class ModelCatalogs extends Effect.Service<ModelCatalogs>()('ModelCatalog
 
     const decodeAnthropic = Schema.decodeUnknown(AnthropicModels)
     const decodeOpenAi = Schema.decodeUnknown(OpenAiModels)
+    const decodeCodex = Schema.decodeUnknown(CodexModels)
     const decodeModelsDev = Schema.decodeUnknown(ModelsDev)
 
     const json = (request: HttpClientRequest.HttpClientRequest) =>
@@ -238,17 +253,34 @@ export class ModelCatalogs extends Effect.Service<ModelCatalogs>()('ModelCatalog
         }))
       })
 
-    /**
-     * A ChatGPT login (`openai.oauth`) has no models endpoint — `codex` ships
-     * its own list — so only a real API key is asked.
-     */
+    /** ChatGPT seats use Codex's account catalogue; API keys use the public API. */
     const openai = (kind: CredentialKind, secret: string) =>
       Effect.gen(function* () {
-        if (kind !== 'openai.api_key') {
-          return yield* Effect.fail(
-            'a ChatGPT login cannot list models; showing the models Codex ships with' as const
+        if (kind === 'openai.oauth') {
+          const bearer = bearerFrom(kind, secret)
+          if (bearer === undefined)
+            return yield* Effect.fail('this credential carries no token to ask with')
+          const payload = yield* json(
+            HttpClientRequest.get(CODEX_MODELS_URL).pipe(
+              HttpClientRequest.setHeaders({
+                accept: 'application/json',
+                authorization: `Bearer ${bearer.token}`,
+                'user-agent': 'Taut',
+                ...(bearer.account === undefined ? {} : { 'chatgpt-account-id': bearer.account })
+              })
+            )
           )
+          const decoded = yield* decodeCodex(payload)
+          return decoded.models
+            .filter((model) => model.visibility === 'list')
+            .sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
+            .map((model): ModelOption => ({
+              id: model.slug,
+              label: model.display_name ?? model.slug
+            }))
         }
+        if (kind !== 'openai.api_key')
+          return yield* Effect.fail('this credential cannot list Codex models')
         const payload = yield* json(
           HttpClientRequest.get(OPENAI_MODELS_URL).pipe(
             HttpClientRequest.setHeaders({

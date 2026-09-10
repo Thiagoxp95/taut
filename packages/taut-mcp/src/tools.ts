@@ -184,6 +184,24 @@ const askHumanOrAgent = (c: TautClient, i: typeof AskRequest.Type) =>
     }
   })
 
+// Some agent tool calls supply numbers as strings. Normalize only this tool's
+// duration at the MCP boundary; the HTTP contract still receives a validated integer.
+const timerDuration = RenderComponentRequest.members[0].fields.durationSeconds
+const renderComponentInput = Schema.Union(
+  Schema.Struct({
+    ...RenderComponentRequest.members[0].fields,
+    durationSeconds: Schema.Union(
+      timerDuration,
+      Schema.String.pipe(
+        Schema.pattern(/^\d+(?:\.\d+)?$/),
+        Schema.compose(Schema.NumberFromString),
+        Schema.compose(timerDuration)
+      )
+    )
+  }),
+  RenderComponentRequest.members[1]
+)
+
 export const tools: ReadonlyArray<Tool> = [
   defineTool({
     name: 'ask_user_question',
@@ -195,8 +213,8 @@ export const tools: ReadonlyArray<Tool> = [
   defineTool({
     name: 'render_component',
     description:
-      'Render an inline component using Taut’s Shadcn theme. kind:"timer" requires title, durationSeconds (1 second to 7 days), and onComplete (instructions for your future turn). It starts immediately and schedules a durable wake in this conversation, even when the user closes the app; finish your turn normally and act when woken. Do not also emit_signal for the same timer. kind:"card" requires title and Markdown body for an informational card. For interactive choices use ask_user_question. For a custom visual use canvas_create. Returns messageId.',
-    input: RenderComponentRequest,
+      'Render an inline component using Taut’s Shadcn theme. kind:"timer" requires title, durationSeconds (a whole number from 1 to 604800; five minutes is 300), and onComplete (instructions for your future turn). It starts immediately and schedules a durable wake in this conversation, even when the user closes the app; finish your turn normally and act when woken. Do not also emit_signal for the same timer. kind:"card" requires title and Markdown body for an informational card. For interactive choices use ask_user_question. For a custom visual use canvas_create. Returns messageId. Only confirm a timer started after a successful result with signalId and endsAt. On validation failure, correct the indicated arguments once; if it still fails, stop and briefly say you could not create it. Do not repeat equivalent inputs, expose schema traces in chat, or speculate about a platform bug.',
+    input: renderComponentInput,
     parameters: Schema.Struct({
       kind: Schema.Literal('timer', 'card'),
       title: RenderComponentRequest.members[0].fields.title,

@@ -236,17 +236,21 @@ export const cursorMcpJson = (o: InjectOptions): CursorMcpJson => ({
 export const cursorPermission = (serverKey: string): string => `Mcp(${serverKey}:*)`
 
 export interface CursorCliJson {
-  readonly permissions: { readonly allow: ReadonlyArray<string> }
+  readonly permissions: {
+    readonly allow: ReadonlyArray<string>
+    readonly deny: ReadonlyArray<string>
+  }
 }
 
 /** `.cursor/cli.json` — without it the headless agent stalls on the MCP permission prompt. */
 export const cursorCliJsonFor = (o: InjectOptions): CursorCliJson => ({
-  permissions: { allow: serverKeys(o).map(cursorPermission) }
+  // Cursor requires both arrays; omitting deny aborts before a session starts.
+  permissions: { allow: serverKeys(o).map(cursorPermission), deny: [] }
 })
 
 /** `cursorCliJsonFor` with no extra servers (kept for callers that only mount `taut`). */
 export const cursorCliJson: CursorCliJson = {
-  permissions: { allow: [cursorPermission(SERVER_KEY)] }
+  permissions: { allow: [cursorPermission(SERVER_KEY)], deny: [] }
 }
 
 /** Flags for `agent -p …`. */

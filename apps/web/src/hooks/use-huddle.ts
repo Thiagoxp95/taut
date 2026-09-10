@@ -29,8 +29,8 @@ export interface HuddleIntent {
 
 export interface HuddleState {
   /**
-   * The single gate (D3). `false` — no LiveKit configured on this deployment — hides every
-   * huddle affordance in the app, so no component needs its own opinion about it.
+   * Whether this deployment has LiveKit configured. Joining and live indicators require it;
+   * channel controls stay visible and explain missing setup.
    */
   readonly enabled: boolean
   /** The huddle this tab is in, if any. */
@@ -212,7 +212,7 @@ export function useHuddle(): HuddleState {
 
 /**
  * The open huddle in a channel, whoever is in it — what the headphones button and the
- * sidebar dot read. Empty whenever calls are off, so both hide themselves (D3).
+ * sidebar dot read. Empty whenever calls are off, so no live indicator appears.
  */
 export function useChannelCall(channelId: string | undefined): Call | undefined {
   const { enabled } = useHuddle()

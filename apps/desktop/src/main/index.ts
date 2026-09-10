@@ -143,6 +143,7 @@ const replaceWindow = (next: Mode): BrowserWindow => {
 
 const openSetup = (): void => {
   cancelClaudeLogin()
+  pendingPath = undefined
   setAllowedOrigins(devOrigins)
   runtime.runFork(Effect.flatMap(Realtime, (realtime) => realtime.stop))
   setBadgeCount(0)
@@ -280,6 +281,11 @@ const registerIpc = (): void => {
   })
   ipcMain.on('taut:claude:cancel', (event) => {
     if (trustedMainFrame(event)) claudeController?.abort()
+  })
+
+  // Instance pages can open the local picker, but cannot supply a replacement URL.
+  ipcMain.on('taut:setup:open', (event) => {
+    if (trustedMainFrame(event)) openSetup()
   })
 
   ipcMain.handle('taut:setup:state', () =>
