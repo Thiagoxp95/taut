@@ -148,6 +148,10 @@ const commonArgs = (homeDir: string): ReadonlyArray<string> => [
   browserOutputDir(homeDir)
 ]
 
+/** Explicit opt-in for a trusted shared container. */
+const localSandboxArgs = (): ReadonlyArray<string> =>
+  process.env['TAUT_BROWSER_NO_SANDBOX'] === 'true' ? ['--no-sandbox'] : []
+
 /**
  * How to start the `browser` MCP server inside the agent's machine.
  *
@@ -194,7 +198,7 @@ export const browserMcpSpec = (o: BrowserMcpSpecOptions): BrowserMcpSpec => {
       }
       return {
         command: 'node',
-        args: [browserMcpCliPath(), ...commonArgs(o.homeDir)],
+        args: [browserMcpCliPath(), ...commonArgs(o.homeDir), ...localSandboxArgs()],
         env: { PLAYWRIGHT_BROWSERS_PATH: hostPlaywrightBrowsersPath() }
       }
   }
@@ -461,6 +465,7 @@ export const ensureLocalBrowserDaemon = (
         binary,
         [
           '--headless=new',
+          ...localSandboxArgs(),
           '--disable-gpu',
           '--disable-dev-shm-usage',
           '--no-first-run',

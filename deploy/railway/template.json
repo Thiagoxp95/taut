@@ -1,0 +1,71 @@
+{
+  "$schema": "https://backboard.railway.app/schema/template.schema.json",
+  "buckets": {},
+  "services": {
+    "745b4a29-a944-4d57-80c3-48ec8b504f4e": {
+      "deploy": {
+        "healthcheckPath": "/api/health",
+        "restartPolicyMaxRetries": 10,
+        "restartPolicyType": "ON_FAILURE",
+        "startCommand": null
+      },
+      "icon": null,
+      "name": "Taut",
+      "networking": {
+        "serviceDomains": {
+          "<hasDomain>:3000": {
+            "port": 3000
+          }
+        }
+      },
+      "source": {
+        "repo": "https://github.com/Thiagoxp95/taut",
+        "rootDirectory": "/"
+      },
+      "variables": {
+        "NODE_ENV": {
+          "defaultValue": "production",
+          "isOptional": false
+        },
+        "PORT": {
+          "defaultValue": "3000",
+          "isOptional": false
+        },
+        "RAILWAY_DOCKERFILE_PATH": {
+          "defaultValue": "deploy/railway/Dockerfile",
+          "description": "",
+          "isOptional": false
+        },
+        "TAUT_COOKIE_SECURE": {
+          "defaultValue": "true",
+          "isOptional": false
+        },
+        "TAUT_DATA_DIR": {
+          "defaultValue": "/data",
+          "isOptional": false
+        },
+        "TAUT_MACHINE_PROVIDER": {
+          "defaultValue": "local",
+          "isOptional": false
+        },
+        "TAUT_MASTER_KEY": {
+          "defaultValue": "${{secret(43, \"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/\")}}=",
+          "isOptional": false
+        },
+        "TAUT_MAX_CONCURRENT_TASKS": {
+          "defaultValue": "1",
+          "isOptional": false
+        },
+        "TAUT_PUBLIC_URL": {
+          "defaultValue": "https://${{RAILWAY_PUBLIC_DOMAIN}}",
+          "isOptional": false
+        }
+      },
+      "volumeMounts": {
+        "745b4a29-a944-4d57-80c3-48ec8b504f4e": {
+          "mountPath": "/data"
+        }
+      }
+    }
+  }
+}
