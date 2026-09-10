@@ -1,6 +1,6 @@
 {
   "name": "@taut/desktop",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "productName": "Taut",
   "private": true,
   "description": "Taut desktop app (Electron + React + Tailwind + shadcn/ui)",
@@ -19,7 +19,8 @@
     "package": "pnpm run build && electron-builder --config electron-builder.unsigned.yml --mac --dir --publish never",
     "package:mac": "node scripts/package-mac.mjs --unsigned",
     "release:mac": "node scripts/package-mac.mjs --release",
-    "test:release": "node --test scripts/package-mac.test.mjs"
+    "test:release": "node --test scripts/package-mac.test.mjs scripts/prepare-release.test.mjs",
+    "test:updater": "node --test scripts/updater.test.mjs"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -45,8 +46,10 @@
     "electron-builder": "^26.0.12",
     "electron-vite": "^5.0.0",
     "eslint": "^9.39.1",
+    "js-yaml": "^4.3.2",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
     "vite": "^7.2.6"
-  }
+  },
+  "license": "MIT"
 }

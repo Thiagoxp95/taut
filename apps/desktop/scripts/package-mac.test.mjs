@@ -99,3 +99,26 @@ test('tagged releases must match the desktop version', () => {
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /does not match desktop version/)
 })
+
+test('rejects malformed and prerelease tags before requesting credentials', () => {
+  for (const tag of ['v1.0.0-beta.1', 'v01.0.0', 'v1.0', 'v1.0.0+build']) {
+    const result = run(['--release'], { GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: tag })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /stable semver/)
+  }
+})
+
+test('fork releases accept an owner/repository feed and reject malformed names', () => {
+  const credentials = {
+    CSC_LINK: 'certificate.p12',
+    CSC_KEY_PASSWORD: 'password',
+    APPLE_KEYCHAIN_PROFILE: 'profile'
+  }
+  assert.equal(
+    run(['--release'], { ...credentials, GITHUB_REPOSITORY: 'fork-owner/taut-fork' }).status,
+    0
+  )
+  const result = run(['--release'], { ...credentials, GITHUB_REPOSITORY: '../bad/path' })
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /owner\/repository/)
+})

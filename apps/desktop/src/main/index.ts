@@ -10,6 +10,10 @@ import {
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { Effect, Either, Layer, LogLevel, Logger, ManagedRuntime } from 'effect'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
+import electronUpdater from 'electron-updater'
+import { createDesktopUpdater } from './updater'
 
 import { signInToClaude } from './claude-login'
 import { serveClaudeBrowserLogin } from './claude-browser-login'
@@ -73,6 +77,7 @@ let claudeController: AbortController | undefined
 let claudeTask: ReturnType<typeof signInToClaude> | undefined
 let browserLogin: Awaited<ReturnType<typeof serveClaudeBrowserLogin>> | undefined
 let pendingClaudeLink: string | undefined
+let updates: ReturnType<typeof createDesktopUpdater> | undefined
 
 const cancelClaudeLogin = (): void => {
   claudeController?.abort()
@@ -250,6 +255,24 @@ const registerIpc = (): void => {
     event.senderFrame === event.sender.mainFrame &&
     new URL(event.senderFrame.url).origin === new URL(currentInstanceUrl).origin
 
+  const trustedUpdaterFrame = (event: IpcMainInvokeEvent): boolean => {
+    if (
+      !mainWindow ||
+      event.sender !== mainWindow.webContents ||
+      event.senderFrame !== event.sender.mainFrame
+    )
+      return false
+    if (mode === 'instance') return trustedMainFrame(event)
+    const expected = rendererDevUrl ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
+    return event.senderFrame.url === expected || event.senderFrame.url === `${expected}/`
+  }
+  for (const action of ['state', 'check', 'restart'] as const) {
+    ipcMain.handle(`taut:update:${action}`, (event) => {
+      if (!trustedUpdaterFrame(event) || !updates) throw new Error('Updates are unavailable here.')
+      return updates[action]()
+    })
+  }
+
   ipcMain.handle('taut:claude:connect', (event) => {
     if (!trustedMainFrame(event) || browserLogin)
       throw new Error('Claude sign-in is unavailable here.')
@@ -332,7 +355,69 @@ if (!singleInstance) {
     const partition = session.fromPartition(PARTITION)
     installRequestFilter(partition)
     installDisplayMediaHandler(partition)
-    installMenu({ switchInstance: openSetup, openSettings: () => open(SETTINGS_PATH) })
+    const { autoUpdater } = electronUpdater
+    autoUpdater.channel = `latest-${process.arch}`
+    updates = createDesktopUpdater({
+      updater: autoUpdater,
+      enabled: app.isPackaged && existsSync(join(process.resourcesPath, 'app-update.yml')),
+      version: app.getVersion(),
+      changed: (state) => {
+        if (mainWindow && !mainWindow.isDestroyed())
+          mainWindow.webContents.send('taut:update:state', state)
+      },
+      prepareRestart: async () => {
+        const task = claudeTask
+        cancelClaudeLogin()
+        if (task) await task.catch(() => {})
+        closeHuddle()
+      }
+    })
+    installMenu({
+      switchInstance: openSetup,
+      openSettings: () => open(SETTINGS_PATH),
+      checkForUpdates: async () => {
+        await updates?.check()
+        const state = updates?.state()
+        if (!state) return
+        if (state.status === 'ready') {
+          const answer = await dialog.showMessageBox({
+            type: 'info',
+            message: `Taut ${state.version} is ready to install`,
+            detail:
+              'Save any drafts before restarting. Active calls will end. Your server and agents will keep running.',
+            buttons: ['Restart to update', 'Later'],
+            defaultId: 1,
+            cancelId: 1
+          })
+          if (answer.response === 0) await updates?.restart()
+        } else {
+          await dialog.showMessageBox({
+            type: 'info',
+            message:
+              state.status === 'disabled'
+                ? 'Updates are available in signed release builds.'
+                : state.status === 'error'
+                  ? state.message
+                  : state.status === 'current'
+                    ? `Taut ${app.getVersion()} is up to date.`
+                    : 'Taut is downloading an update.'
+          })
+        }
+      }
+    })
+    const firstCheck = setTimeout(() => {
+      void updates?.check()
+    }, 15_000)
+    const updateTimer = setInterval(
+      () => {
+        void updates?.check()
+      },
+      4 * 60 * 60 * 1000
+    )
+    app.once('will-quit', () => {
+      clearTimeout(firstCheck)
+      clearInterval(updateTimer)
+    })
     registerIpc()
 
     app.on('browser-window-created', (_event, window) => optimizer.watchWindowShortcuts(window))

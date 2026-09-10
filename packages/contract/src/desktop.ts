@@ -13,6 +13,19 @@
 /** Where the OS notification (or a `taut://` deep link) wants the app to go. */
 export type DesktopNavigateHandler = (path: string) => void
 
+export type DesktopUpdateState =
+  | { readonly status: 'idle' | 'disabled' | 'checking' | 'current'; readonly version: string }
+  | { readonly status: 'downloading'; readonly version: string; readonly percent: number }
+  | { readonly status: 'ready' | 'restarting'; readonly version: string }
+  | { readonly status: 'error'; readonly version: string; readonly message: string }
+
+export interface DesktopUpdateBridge {
+  readonly state: () => Promise<DesktopUpdateState>
+  readonly check: () => Promise<void>
+  readonly restart: () => Promise<void>
+  readonly onState: (handler: (state: DesktopUpdateState) => void) => () => void
+}
+
 export interface ClaudeDesktopLogin {
   readonly kind: 'claude.login'
   readonly secret: string
@@ -29,6 +42,8 @@ export interface DesktopNotification {
 }
 
 export interface TautBridge {
+  /** Optional for older shells and intentionally absent in huddle windows. */
+  readonly updates?: DesktopUpdateBridge
   /** `process.platform` of the shell — `darwin`, `win32`, `linux`. */
   readonly platform: string
   /** The desktop app's own version (`apps/desktop/package.json`). */

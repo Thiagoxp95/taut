@@ -14,8 +14,32 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: macos-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate stable release version and tag
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs'
+          const { version } = JSON.parse(readFileSync('apps/desktop/package.json', 'utf8'))
+          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+            throw new Error('Only stable semver desktop versions are supported (for example 1.0.0)')
+          }
+          if (process.env.RELEASE_TAG && process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error(`Only the matching stable tag v${version} can be released; prereleases are unsupported`)
+          }
+          JS
+
   package:
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +61,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @taut/desktop test:release
+      - run: pnpm --filter @taut/desktop test:updater
+      - run: pnpm --filter @taut/desktop typecheck
       - name: Build unsigned local testing artifacts
         if: env.RELEASE_MODE != 'true'
         run: pnpm --filter @taut/desktop package:mac --arch=${{ matrix.arch }}
@@ -72,15 +98,17 @@ jobs:
           mode=unsigned
           if [ "$RELEASE_MODE" = true ]; then mode=release; fi
           output="apps/desktop/dist/$mode"
-          dmg=$(find "$output" -maxdepth 1 -name '*.dmg' -print)
-          test -n "$dmg"
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          suffix=
+          if [ "$mode" = unsigned ]; then suffix=-unsigned; fi
+          dmg="$output/Taut-$version-mac-$ARCH$suffix.dmg"
+          test -f "$dmg"
           hdiutil verify "$dmg"
           mountpoint=$(mktemp -d)
           hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mountpoint"
           trap 'hdiutil detach "$mountpoint"; rmdir "$mountpoint"' EXIT
           app="$mountpoint/Taut.app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = dev.taut.desktop
-          version=$(node -p "require('./apps/desktop/package.json').version")
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
           expected_arch="$ARCH"
           if [ "$ARCH" = x64 ]; then expected_arch=x86_64; fi
@@ -89,14 +117,18 @@ jobs:
             codesign --verify --deep --strict --verbose=2 "$app"
             xcrun stapler validate "$app"
             spctl --assess --type execute --verbose=2 "$app"
+            node apps/desktop/scripts/prepare-release.mjs --dir="$output" --version="$version" --arch="$ARCH" --verify
+          else
+            (cd "$output" && shasum -a 256 *.dmg *.zip > "SHA256SUMS-$ARCH.txt")
           fi
-          (cd "$output" && shasum -a 256 *.dmg *.zip > "SHA256SUMS-$ARCH.txt")
       - uses: actions/upload-artifact@v4
         with:
           name: Taut-mac-${{ matrix.arch }}-${{ env.RELEASE_MODE == 'true' && 'release' || 'unsigned' }}
           path: |
             apps/desktop/dist/${{ env.ARTIFACT_DIR }}/*.dmg
             apps/desktop/dist/${{ env.ARTIFACT_DIR }}/*.zip
+            apps/desktop/dist/${{ env.ARTIFACT_DIR }}/*.blockmap
+            apps/desktop/dist/${{ env.ARTIFACT_DIR }}/latest-*-mac.yml
             apps/desktop/dist/${{ env.ARTIFACT_DIR }}/SHA256SUMS-*.txt
           if-no-files-found: error
 
@@ -107,11 +139,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - uses: actions/download-artifact@v4
         with:
           pattern: Taut-mac-*-release
           path: artifacts
           merge-multiple: true
+      - name: Verify both release feeds and downloaded checksums
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          for arch in arm64 x64; do
+            node apps/desktop/scripts/prepare-release.mjs --dir=artifacts --version="$version" --arch="$arch" --verify
+          done
       - name: Prepare draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Download Taut for Mac. An open-source workspace for your team and AI agents, connected to a server you control."
+    />
+    <meta name="theme-color" content="#17151b" />
+    <title>Download Taut — your team, your agents, your server</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter,
+          ui-sans-serif,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+        background: #17151b;
+        color: #f7f4fa;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      a {
+        color: inherit;
+        text-underline-offset: 4px;
+      }
+      a:focus-visible {
+        outline: 3px solid #d1b1fa;
+        outline-offset: 5px;
+      }
+      nav,
+      main,
+      footer {
+        width: min(1120px, calc(100% - 48px));
+        margin: auto;
+      }
+      nav {
+        height: 104px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .brand {
+        font-weight: 750;
+        font-size: 26px;
+        text-decoration: none;
+        letter-spacing: -1px;
+      }
+      .brand span {
+        color: #c7a7ea;
+      }
+      nav > a:last-child {
+        font-size: 14px;
+        color: #d1c9d7;
+      }
+      main {
+        padding: 70px 0 90px;
+      }
+      .eyebrow {
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        font-size: 12px;
+        color: #c7a7ea;
+        font-weight: 650;
+      }
+      h1 {
+        font-size: clamp(44px, 6.4vw, 82px);
+        line-height: 1.06;
+        letter-spacing: -0.055em;
+        font-weight: 550;
+        margin: 26px 0;
+        max-width: 900px;
+      }
+      h1 span {
+        color: #bca5cf;
+      }
+      .lead {
+        font-size: clamp(18px, 2vw, 22px);
+        line-height: 1.55;
+        max-width: 650px;
+        color: #c2b9cb;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 36px;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        min-height: 54px;
+        border-radius: 10px;
+        padding: 14px 22px;
+        background: #eadcf6;
+        color: #24162e;
+        text-decoration: none;
+        font-weight: 650;
+        font-size: 16px;
+      }
+      .secondary {
+        background: transparent;
+        color: #f4ecfb;
+        border: 1px solid #514558;
+      }
+      .meta {
+        font-size: 14px;
+        color: #b0a5ba;
+        line-height: 1.8;
+        margin: 16px 0 0;
+      }
+      .meta a {
+        color: #d9c6eb;
+      }
+      .steps {
+        border-top: 1px solid #39313f;
+        margin-top: 72px;
+        padding-top: 30px;
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 40px;
+      }
+      .step-number {
+        color: #c7a7ea;
+        font-size: 12px;
+        letter-spacing: 0.12em;
+      }
+      h2 {
+        font-size: 18px;
+        font-weight: 550;
+        margin: 14px 0 10px;
+      }
+      .steps p {
+        font-size: 15px;
+        line-height: 1.7;
+        color: #bfb4c9;
+        margin: 0;
+      }
+      .steps a {
+        color: #eadcf6;
+      }
+      footer {
+        border-top: 1px solid #39313f;
+        padding: 24px 0 36px;
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        color: #a79caf;
+        font-size: 13px;
+      }
+      @media (max-width: 650px) {
+        nav {
+          height: 80px;
+        }
+        main {
+          padding-top: 36px;
+          padding-bottom: 48px;
+        }
+        .steps {
+          grid-template-columns: 1fr;
+          gap: 28px;
+          margin-top: 48px;
+        }
+        .actions {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        footer {
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <nav aria-label="Main navigation">
+      <a class="brand" href="./">taut<span>.</span></a
+      ><a href="https://github.com/Thiagoxp95/taut">View on GitHub ↗</a>
+    </nav>
+    <main>
+      <p class="eyebrow">Open source · MIT licensed</p>
+      <h1>Your team. Your agents.<br /><span>Your server.</span></h1>
+      <p class="lead">
+        One workspace for the people and AI agents you work with. Download Taut, connect to your
+        server, and pick up the conversation.
+      </p>
+      <div class="actions">
+        <a
+          class="button"
+          href="https://github.com/Thiagoxp95/taut/releases/latest/download/Taut-mac-arm64.dmg"
+          ><span aria-hidden="true">↓</span> Download for Mac
+          <span style="font-weight: 400">· Apple Silicon</span></a
+        >
+        <a
+          class="button secondary"
+          href="https://github.com/Thiagoxp95/taut/blob/main/docs/self-hosting.md"
+          >Set up your server ↗</a
+        >
+      </div>
+      <p class="meta">
+        Using an Intel Mac?
+        <a href="https://github.com/Thiagoxp95/taut/releases/latest/download/Taut-mac-x64.dmg"
+          >Download for Intel</a
+        ><br /><a href="https://github.com/Thiagoxp95/taut/releases/latest"
+          >Release notes &amp; checksums</a
+        >
+        · Signed and notarized for macOS
+      </p>
+      <div class="steps">
+        <section>
+          <span class="step-number">01 / INSTALL</span>
+          <h2>A desktop client for everyone</h2>
+          <p>
+            Open the DMG and drag Taut to Applications. The same download works with every Taut
+            server.
+          </p>
+        </section>
+        <section>
+          <span class="step-number">02 / CONNECT</span>
+          <h2>Bring your server address</h2>
+          <p>
+            Enter the URL from your workspace administrator, or
+            <a href="https://github.com/Thiagoxp95/taut/blob/main/docs/self-hosting.md"
+              >host your own instance</a
+            >. Your server runs the agents and stores your workspace.
+          </p>
+        </section>
+        <section>
+          <span class="step-number">03 / STAY CURRENT</span>
+          <h2>Restart when you’re ready</h2>
+          <p>
+            Taut downloads desktop updates in the background. When an update is ready, choose
+            “Restart to update.” Server upgrades stay with your administrator.
+          </p>
+        </section>
+      </div>
+    </main>
+    <footer>
+      <span
+        >Taut · Open source under the
+        <a href="https://github.com/Thiagoxp95/taut/blob/main/LICENSE">MIT license</a></span
+      ><span>The desktop app requires a running Taut server.</span>
+    </footer>
+  </body>
+</html>

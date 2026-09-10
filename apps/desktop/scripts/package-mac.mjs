@@ -3,6 +3,7 @@ import process from 'node:process'
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { prepareRelease, stableVersion } from './prepare-release.mjs'
 
 const args = process.argv.slice(2)
 const release = args.includes('--release')
@@ -23,6 +24,16 @@ if (
 }
 const cwd = fileURLToPath(new URL('../', import.meta.url))
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+if (
+  release &&
+  (!stableVersion.test(version) ||
+    (process.env.GITHUB_REF_TYPE === 'tag' &&
+      !/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(process.env.GITHUB_REF_NAME ?? '')))
+) {
+  fail(
+    'Release version and tag must use stable semver (e.g. 1.0.0 and v1.0.0); prereleases are unsupported'
+  )
+}
 if (
   release &&
   process.env.GITHUB_REF_TYPE === 'tag' &&
@@ -53,6 +64,10 @@ if (release) {
     fail('Release signing cannot disable identity discovery')
 }
 const mode = release ? 'release' : 'unsigned'
+const repository = process.env.GITHUB_REPOSITORY ?? 'Thiagoxp95/taut'
+if (release && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+  fail('GITHUB_REPOSITORY must be an owner/repository name')
+}
 console.log(`${mode} macOS ${arch} preflight passed`)
 if (args.includes('--check')) process.exit(0)
 if (process.platform !== 'darwin')
@@ -73,10 +88,16 @@ for (const command of [
     '--mac',
     `--${arch}`,
     '--publish',
-    'never'
+    'never',
+    ...(release
+      ? [`--config.publish.url=https://github.com/${repository}/releases/latest/download`]
+      : [])
   ]
 ]) {
   const result = spawnSync('pnpm', command, { cwd, env, stdio: 'inherit' })
   if (result.error) fail(result.error.message)
   if (result.status !== 0) process.exit(result.status ?? 1)
+}
+if (release) {
+  await prepareRelease({ directory: `${cwd}/dist/release`, version, arch })
 }

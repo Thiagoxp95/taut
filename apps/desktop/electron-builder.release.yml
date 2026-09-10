@@ -2,5 +2,10 @@ extends: ./electron-builder.yml
 directories:
   output: dist/release
 forceCodeSigning: true
+publish:
+  provider: generic
+  url: https://github.com/Thiagoxp95/taut/releases/latest/download
+  channel: latest
+  useMultipleRangeRequest: false
 mac:
   notarize: true

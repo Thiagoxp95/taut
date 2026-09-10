@@ -1,3 +1,4 @@
+import type { DesktopUpdateBridge } from '@taut/contract/desktop'
 /**
  * The Connect screen's bridge, as types only — kept out of `setup.ts` so the
  * renderer's type program can see `window.tautSetup` without pulling in
@@ -14,6 +15,7 @@ export type ConnectResult =
   | { readonly ok: false; readonly message: string }
 
 export interface TautSetupBridge {
+  readonly updates: DesktopUpdateBridge
   readonly state: () => Promise<SetupState>
   /** Validates `GET <url>/api/health`, stores the URL, then loads the instance. */
   readonly connect: (url: string) => Promise<ConnectResult>

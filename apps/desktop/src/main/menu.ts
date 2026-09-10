@@ -1,6 +1,7 @@
 import { Menu, app, type MenuItemConstructorOptions } from 'electron'
 
 export interface MenuActions {
+  readonly checkForUpdates: () => Promise<void>
   readonly switchInstance: () => void
   /** ⌘, — the closest thing Taut has to preferences. */
   readonly openSettings: () => void
@@ -21,6 +22,13 @@ export const installMenu = (actions: MenuActions): void => {
     click: () => actions.openSettings()
   }
 
+  const checkForUpdates: MenuItemConstructorOptions = {
+    label: 'Check for Updates…',
+    click: () => {
+      void actions.checkForUpdates()
+    }
+  }
+
   const template: MenuItemConstructorOptions[] = [
     ...(isMac
       ? ([
@@ -28,6 +36,7 @@ export const installMenu = (actions: MenuActions): void => {
             label: app.name,
             submenu: [
               { role: 'about' },
+              checkForUpdates,
               { type: 'separator' },
               settings,
               switchInstance,
@@ -45,7 +54,13 @@ export const installMenu = (actions: MenuActions): void => {
       : ([
           {
             label: 'File',
-            submenu: [settings, switchInstance, { type: 'separator' }, { role: 'quit' }]
+            submenu: [
+              settings,
+              switchInstance,
+              checkForUpdates,
+              { type: 'separator' },
+              { role: 'quit' }
+            ]
           }
         ] satisfies MenuItemConstructorOptions[])),
     {

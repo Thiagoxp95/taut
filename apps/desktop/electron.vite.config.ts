@@ -5,14 +5,18 @@ import tailwindcss from '@tailwindcss/vite'
 
 // `@taut/contract` ships TypeScript sources, so it can never be `require`d at
 // runtime — it has to be bundled into both the main and the preload output.
+// Legacy generated .js siblings are tracked; always bundle the TypeScript source.
+const extensions = ['.mjs', '.ts', '.tsx', '.js', '.jsx', '.json']
 const bundleWorkspace = { exclude: ['@taut/contract'] }
 
 export default defineConfig({
   main: {
+    resolve: { extensions },
     plugins: [externalizeDepsPlugin(bundleWorkspace)],
     build: { rollupOptions: { input: resolve('src/main/index.ts') } }
   },
   preload: {
+    resolve: { extensions },
     // sandbox: true means the preload cannot require() node_modules; bundle its deps.
     plugins: [externalizeDepsPlugin({ exclude: ['@electron-toolkit/preload', '@taut/contract'] })],
     build: {
@@ -34,6 +38,7 @@ export default defineConfig({
   },
   renderer: {
     resolve: {
+      extensions,
       alias: {
         '@renderer': resolve('src/renderer/src')
       }

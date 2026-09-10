@@ -1,4 +1,5 @@
 extends: ./electron-builder.yml
+publish: null
 directories:
   output: dist/unsigned
 mac:

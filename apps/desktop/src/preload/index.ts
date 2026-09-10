@@ -1,3 +1,4 @@
+import type { DesktopUpdateBridge } from '@taut/contract/desktop'
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   DesktopNavigateHandler,
@@ -26,7 +27,21 @@ const info = ((): ShellInfo => {
  *
  * `huddle.ts` is a deliberate copy of this file (see the note there).
  */
+const updates: DesktopUpdateBridge = {
+  state: () => ipcRenderer.invoke('taut:update:state'),
+  check: () => ipcRenderer.invoke('taut:update:check'),
+  restart: () => ipcRenderer.invoke('taut:update:restart'),
+  onState: (handler) => {
+    const listener = (_event: unknown, state: Parameters<typeof handler>[0]): void => handler(state)
+    ipcRenderer.on('taut:update:state', listener)
+    return () => {
+      ipcRenderer.removeListener('taut:update:state', listener)
+    }
+  }
+}
+
 const taut: TautBridge = {
+  updates,
   platform: info.platform,
   version: info.version,
   connectClaude: () => ipcRenderer.invoke('taut:claude:connect'),

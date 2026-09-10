@@ -1,3 +1,4 @@
+import { DesktopUpdateCard } from '@taut/ui/components/desktop-update-card'
 import { useEffect, useState } from 'react'
 import { Loader2, PlugZap } from '@taut/ui/components/icons'
 
@@ -69,7 +70,7 @@ export default function App(): React.JSX.Element {
               spellCheck={false}
               autoCapitalize="off"
               autoCorrect="off"
-              placeholder="http://localhost:3000"
+              placeholder="https://taut.example.com"
               value={url}
               disabled={busy}
               onChange={(event) => setUrl(event.target.value)}
@@ -77,7 +78,7 @@ export default function App(): React.JSX.Element {
             {error === undefined ? (
               <p className="text-xs text-muted-foreground">
                 {configured === undefined
-                  ? 'We will check /api/health before opening it.'
+                  ? 'Enter the server address provided by your workspace administrator.'
                   : `Currently connected to ${configured}.`}
               </p>
             ) : (
@@ -93,6 +94,7 @@ export default function App(): React.JSX.Element {
           </Button>
         </form>
       </div>
+      <DesktopUpdateCard bridge={window.tautSetup?.updates} />
     </main>
   )
 }

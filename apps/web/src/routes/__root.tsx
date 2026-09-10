@@ -1,3 +1,4 @@
+import { DesktopUpdateCard } from '@taut/ui/components/desktop-update-card'
 import type { QueryClient } from '@tanstack/react-query'
 import { Link, Outlet, createRootRouteWithContext } from '@tanstack/react-router'
 import { CompassIcon } from '@taut/ui/components/icons'
@@ -16,6 +17,7 @@ function RootLayout() {
         <Outlet />
       </div>
       <Toaster />
+      <DesktopUpdateCard bridge={window.taut?.updates} />
     </TooltipProvider>
   )
 }

@@ -58,6 +58,14 @@ and first Railway deployment are still pending. See the guide for verification s
 
 ## Desktop app
 
+[Download Taut for Mac](https://taut-downloads.quick-cove-9010.chatgpt.site) · [GitHub releases](https://github.com/Thiagoxp95/taut/releases/latest) · [MIT license](LICENSE)
+
+The desktop client is a separate download from the server. Install it, enter your server URL,
+and sign in to your workspace. Signed builds download desktop updates in the background and
+show **Restart to update** when ready. Your server and its agents keep running; administrators
+upgrade the server separately.
+
+
 `apps/desktop` is an Electron shell around the same web client: first launch asks for your instance
 URL (checked with `GET <url>/api/health`, remembered in `app.getPath("userData")/instance.json`,
 changed again from **Switch instance…** in the menu), then the window loads that origin — and only
