@@ -17,6 +17,13 @@ Date: 2026-09-10. This file separates implemented behavior from a completed inst
 - An isolated Electron process using a temporary `--user-data-dir` opened the real bundled connection screen. Its real preload reported updates disabled in development. Main-process fixture events reached the React update card; ready, dismiss, and retry UI passed. The process and temporary profile were removed afterward. This is a UI/IPC smoke test, **not** evidence that an actual signed update was downloaded or installed.
 - Source resolution explicitly prefers TypeScript over legacy generated JavaScript siblings, so packaging includes the current implementation.
 
+## CI and packaged runtime
+
+- [macOS CI run 34513452519](https://github.com/Thiagoxp95/taut/actions/runs/34513452519) passed version validation and both native architecture jobs with unsigned test builds. Its draft-release job was correctly skipped for a manual unsigned run.
+- The arm64 CI artifact was downloaded. Its DMG and ZIP both passed the published SHA-256 checks. The ZIP's actual packaged Taut executable launched in an isolated profile, reported version `1.0.0` and `app.isPackaged === true`, exposed the setup/update preload, and kept updates disabled for the unsigned build. Ready/dismiss/retry UI passed using explicit fixture events. This also verifies that the packaged runtime includes its dependencies.
+- Self-host and Railway CI passed for the implementation commits, including `6270b97`.
+- The public download page and its release-status script both returned HTTP 200 anonymously. It currently reports that the first release is being prepared, matching GitHub's empty release list.
+
 ## Remaining release proof
 
 The owner requested a signed `1.0.0` followed by `1.0.1` and a real installed-app upgrade. Neither version has been published yet. The four signing/key secrets are configured; the matching App Store Connect issuer ID is still needed for `APPLE_API_ISSUER`.
