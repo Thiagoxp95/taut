@@ -1,6 +1,6 @@
 {
   "name": "@taut/desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "productName": "Taut",
   "private": true,
   "description": "Taut desktop app (Electron + React + Tailwind + shadcn/ui)",

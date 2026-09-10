@@ -7,7 +7,7 @@ import { Input } from '@taut/ui/components/input'
 import { Label } from '@taut/ui/components/label'
 
 /**
- * "Connect to your Taut" — the only screen the shell renders itself. Every
+ * "Connect to your workspace" — the only screen the shell renders itself. Every
  * other pixel comes from the instance the user points it at.
  */
 export default function App(): React.JSX.Element {
@@ -55,7 +55,7 @@ export default function App(): React.JSX.Element {
           <span aria-hidden className="text-3xl">
             🧵
           </span>
-          <h1 className="text-xl font-semibold tracking-tight">Connect to your Taut</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Connect to your workspace</h1>
           <p className="text-sm text-muted-foreground">
             Taut is self-hosted, so the app needs the address of your server.
           </p>
